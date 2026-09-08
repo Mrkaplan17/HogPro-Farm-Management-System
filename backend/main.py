@@ -966,6 +966,19 @@ def low_stock_alerts(db: Session = Depends(get_db), current_user: User = Depends
     return [_serialize_inventory_item(i) for i in low]
 
 
+@app.get("/api/inventory/transactions", response_model=List[InventoryTransactionResponse])
+def list_inventory_transactions(
+    item_id: Optional[int] = Query(None),
+    limit: Optional[int] = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(InventoryTransaction)
+    if item_id:
+        query = query.filter(InventoryTransaction.item_id == item_id)
+    return query.order_by(InventoryTransaction.id.desc()).limit(limit).all()
+
+
 @app.get("/api/inventory/{item_id}", response_model=InventoryItemResponse)
 def get_inventory_item(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return _serialize_inventory_item(_item_or_404(item_id, db))
@@ -1049,19 +1062,6 @@ def issue_item(item_id: int, data: IssueRequest, db: Session = Depends(get_db), 
     db.commit()
     db.refresh(txn)
     return txn
-
-
-@app.get("/api/inventory/transactions", response_model=List[InventoryTransactionResponse])
-def list_inventory_transactions(
-    item_id: Optional[int] = Query(None),
-    limit: Optional[int] = Query(50, ge=1, le=500),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    query = db.query(InventoryTransaction)
-    if item_id:
-        query = query.filter(InventoryTransaction.item_id == item_id)
-    return query.order_by(InventoryTransaction.id.desc()).limit(limit).all()
 
 
 # ─── VITAMINS / HEALTH SCHEDULE ─────────────────────────────────────

@@ -27,7 +27,9 @@ async function request(path, options = {}) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.detail || res.statusText)
+    let detail = err.detail
+    if (Array.isArray(detail)) detail = detail.map((d) => d.msg || '').filter(Boolean).join('; ')
+    throw new Error(typeof detail === 'string' && detail ? detail : res.statusText)
   }
 
   if (res.status === 204) return null

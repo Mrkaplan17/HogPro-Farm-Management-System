@@ -25,7 +25,7 @@ export default function Inventory() {
     try {
       const [itemsData, txnData, alerts, batchesData] = await Promise.all([
         api.getInventory(),
-        api.getInventoryTransactions({ limit: 50 }),
+        api.getInventoryTransactions({ limit: 50 }).catch(() => []),
         api.getInventoryAlerts().catch(() => []),
         api.getBatches().catch(() => []),
       ])
