@@ -1,11 +1,13 @@
+import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, Settings as SettingsIcon, PiggyBank, LogOut } from 'lucide-react'
+import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, Settings as SettingsIcon, PiggyBank, LogOut, HelpCircle } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import DevCredit from './DevCredit'
 
 export default function Layout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [confirmLogout, setConfirmLogout] = useState(false)
 
   function handleLogout() {
     logout()
@@ -65,7 +67,7 @@ export default function Layout() {
               <p className="text-sm font-medium truncate">{user?.full_name || user?.username}</p>
               <p className="text-xs text-slate-400">Admin</p>
             </div>
-            <button onClick={handleLogout} title="Sign out" className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800">
+            <button onClick={() => setConfirmLogout(true)} title="Sign out" className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800">
               <LogOut className="w-4 h-4" />
             </button>
           </div>
@@ -75,6 +77,42 @@ export default function Layout() {
       <div className="flex-1 ml-64">
         <Outlet />
       </div>
+
+      {confirmLogout && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setConfirmLogout(false)}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-4">
+              <div className="bg-red-50 rounded-xl p-2.5 shrink-0">
+                <HelpCircle className="w-6 h-6 text-red-500" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-slate-900">Sign out of HogPros?</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Are you sure you want to sign out? You'll need to log back in to access your farm records.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmLogout(false)}
+                className="px-4 py-2 text-sm font-medium text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleLogout}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

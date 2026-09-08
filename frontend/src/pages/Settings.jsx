@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings as SettingsIcon, Save, KeyRound, Mail, Lock } from 'lucide-react'
+import { Settings as SettingsIcon, Save, KeyRound, Mail, Lock, User, MapPin, Building2 } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { api } from '../api'
 
@@ -23,7 +23,7 @@ export default function Settings() {
   }, [user])
 
   const inputClass =
-    'w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500'
+    'w-full border border-slate-300 rounded-lg pl-10 py-2.5 pr-3 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500'
 
   async function saveProfile(e) {
     e.preventDefault()
@@ -61,115 +61,102 @@ export default function Settings() {
     }
   }
 
+  const field = (label, value, onChange, icon, placeholder, opts = {}) => (
+    <div>
+      <label className="block text-sm font-medium text-slate-700 mb-1.5">{label}</label>
+      <div className="relative">
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">{icon}</span>
+        <input value={value} onChange={onChange} placeholder={placeholder} className={inputClass} {...opts} />
+      </div>
+    </div>
+  )
+
   return (
-    <div className="p-8">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="bg-pink-600 rounded-xl p-2">
+    <div className="p-6 lg:p-8 max-w-5xl mx-auto">
+      <header className="flex items-center gap-3 mb-6">
+        <div className="bg-pink-600 rounded-xl p-2.5 shadow-sm shadow-pink-900/20">
           <SettingsIcon className="w-6 h-6 text-white" />
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Account Settings</h1>
           <p className="text-sm text-slate-500">Manage your profile and password.</p>
         </div>
-      </div>
+      </header>
 
       {msg && (
-        <div className="mb-4 bg-green-50 text-green-700 border border-green-200 rounded-lg px-3 py-2.5 text-sm">{msg}</div>
+        <div className="mb-5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl px-4 py-3 text-sm flex items-center gap-2">
+          <span className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-xs font-bold">✓</span>
+          {msg}
+        </div>
       )}
       {err && (
-        <div className="mb-4 bg-red-50 text-red-700 border border-red-200 rounded-lg px-3 py-2.5 text-sm">{err}</div>
+        <div className="mb-5 bg-red-50 text-red-700 border border-red-200 rounded-xl px-4 py-3 text-sm">{err}</div>
       )}
 
-      <div className="grid lg:grid-cols-2 gap-6">
-        <form onSubmit={saveProfile} className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-          <h2 className="font-bold text-slate-900">Profile</h2>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Email (read-only)</label>
-            <div className="relative">
-              <input value={user?.email || ''} disabled className={`${inputClass} pr-10 bg-slate-100 text-slate-400`} />
-              <Mail className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      <div className="grid lg:grid-cols-2 gap-6 items-start">
+        <form onSubmit={saveProfile} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2.5 bg-gradient-to-r from-slate-50 to-white">
+            <User className="w-4 h-4 text-pink-600" />
+            <div>
+              <h2 className="font-bold text-slate-900 leading-tight">Profile</h2>
+              <p className="text-xs text-slate-400 leading-tight">Your farm and personal details</p>
             </div>
-            <p className="mt-1 text-xs text-slate-400">Your email is your sign-in identity and cannot be changed.</p>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
-            <input
-              value={profile.full_name}
-              onChange={(e) => setProfile({ ...profile, full_name: e.target.value })}
-              className={inputClass}
-              placeholder="e.g. Juan Dela Cruz"
-            />
+
+          <div className="p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Email (read-only)</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"><Mail className="w-4 h-4" /></span>
+                <input value={user?.email || ''} readOnly className={inputClass + ' bg-slate-50 text-slate-500'} />
+              </div>
+              <p className="mt-1.5 text-xs text-slate-400 flex items-center gap-1">
+                <Lock className="w-3 h-3" /> Your email is your sign-in identity and cannot be changed.
+              </p>
+            </div>
+
+            {field('Full Name', profile.full_name, (e) => setProfile({ ...profile, full_name: e.target.value }), <User className="w-4 h-4" />, 'e.g. Juan Dela Cruz')}
+            {field('Farm Name', profile.farm_name, (e) => setProfile({ ...profile, farm_name: e.target.value }), <Building2 className="w-4 h-4" />, 'e.g. Alcayaga Piggery')}
+            {field('Farm Location / Place', profile.farm_location, (e) => setProfile({ ...profile, farm_location: e.target.value }), <MapPin className="w-4 h-4" />, 'e.g. Barangay San Isidro, Tagum City')}
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="submit"
+                disabled={savingProfile}
+                className="inline-flex items-center gap-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-60 text-white font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-pink-900/20 transition-colors"
+              >
+                <Save className="w-4 h-4" />
+                {savingProfile ? 'Saving…' : 'Save profile'}
+              </button>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Farm Name</label>
-            <input
-              value={profile.farm_name}
-              onChange={(e) => setProfile({ ...profile, farm_name: e.target.value })}
-              className={inputClass}
-              placeholder="e.g. Alcayaga Piggery"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Farm Location / Place</label>
-            <input
-              value={profile.farm_location}
-              onChange={(e) => setProfile({ ...profile, farm_location: e.target.value })}
-              className={inputClass}
-              placeholder="e.g. Barangay San Isidro, Tagum City"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={savingProfile}
-            className="w-full flex items-center justify-center gap-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg"
-          >
-            <Save className="w-4 h-4" />
-            {savingProfile ? 'Saving…' : 'Save profile'}
-          </button>
         </form>
 
-        <form onSubmit={savePassword} className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-          <h2 className="font-bold text-slate-900 flex items-center gap-2">
-            <KeyRound className="w-4 h-4 text-pink-600" /> Change Password
-          </h2>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Current Password</label>
-            <input
-              required type="password"
-              value={pwd.current_password}
-              onChange={(e) => setPwd({ ...pwd, current_password: e.target.value })}
-              className={inputClass}
-              placeholder="Enter your current password"
-            />
+        <form onSubmit={savePassword} className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2.5 bg-gradient-to-r from-slate-50 to-white">
+            <KeyRound className="w-4 h-4 text-pink-600" />
+            <div>
+              <h2 className="font-bold text-slate-900 leading-tight">Change Password</h2>
+              <p className="text-xs text-slate-400 leading-tight">Keep your account secure</p>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
-            <input
-              required type="password" minLength="6"
-              value={pwd.new_password}
-              onChange={(e) => setPwd({ ...pwd, new_password: e.target.value })}
-              className={inputClass}
-              placeholder="At least 6 characters"
-            />
+
+          <div className="p-6 space-y-4">
+            {field('Current Password', pwd.current_password, (e) => setPwd({ ...pwd, current_password: e.target.value }), <Lock className="w-4 h-4" />, 'Enter your current password', { type: 'password', required: true })}
+            {field('New Password', pwd.new_password, (e) => setPwd({ ...pwd, new_password: e.target.value }), <Lock className="w-4 h-4" />, 'At least 6 characters', { type: 'password', required: true, minLength: 6 })}
+            {field('Confirm New Password', pwd.confirm_password, (e) => setPwd({ ...pwd, confirm_password: e.target.value }), <Lock className="w-4 h-4" />, 'Re-enter the new password', { type: 'password', required: true, minLength: 6 })}
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="submit"
+                disabled={savingPwd}
+                className="inline-flex items-center gap-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white font-semibold px-5 py-2.5 rounded-xl transition-colors"
+              >
+                <KeyRound className="w-4 h-4" />
+                {savingPwd ? 'Updating…' : 'Update password'}
+              </button>
+            </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Confirm New Password</label>
-            <input
-              required type="password" minLength="6"
-              value={pwd.confirm_password}
-              onChange={(e) => setPwd({ ...pwd, confirm_password: e.target.value })}
-              className={inputClass}
-              placeholder="Re-enter the new password"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={savingPwd}
-            className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg"
-          >
-            <Lock className="w-4 h-4" />
-            {savingPwd ? 'Updating…' : 'Update password'}
-          </button>
         </form>
       </div>
     </div>
