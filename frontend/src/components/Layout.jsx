@@ -81,24 +81,22 @@ export default function Layout() {
       {confirmLogout && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setConfirmLogout(false)}>
           <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start gap-4">
-              <div className="bg-red-50 rounded-xl p-2.5 shrink-0">
-                <HelpCircle className="w-6 h-6 text-red-500" />
+            <div className="p-6">
+              <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4">
+                <HelpCircle className="w-6 h-6 text-red-600" />
               </div>
-              <div className="min-w-0">
-                <h3 className="font-bold text-slate-900">Sign out of HogPros?</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Are you sure you want to sign out? You'll need to log back in to access your farm records.
-                </p>
-              </div>
+              <h3 className="text-lg font-bold text-slate-900">Sign out?</h3>
+              <p className="mt-1.5 text-sm text-slate-500">
+                Are you sure you want to sign out? You'll need to log back in to manage your farm.
+              </p>
             </div>
-            <div className="mt-6 flex justify-end gap-2">
+            <div className="flex justify-end gap-2 bg-slate-50 px-6 py-4">
               <button
                 onClick={() => setConfirmLogout(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-50"
+                className="px-4 py-2 text-sm font-medium text-slate-600 border border-slate-300 rounded-lg hover:bg-white transition-colors"
               >
                 Cancel
               </button>
@@ -107,7 +105,7 @@ export default function Layout() {
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
               >
                 <LogOut className="w-4 h-4" />
-                Sign out
+                Sign Out
               </button>
             </div>
           </div>
