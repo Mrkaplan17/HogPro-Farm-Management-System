@@ -12,5 +12,6 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         value: https://YOUR-SITE.netlify.app
-      - key: DATABASE_URL
-        value: sqlite:///./piggery.db
+      # DATABASE_URL is intentionally NOT set here — paste your Supabase
+      # pooler URL as a secret in the Render dashboard (Security > Environment).
+      # Never commit database credentials to the repository.

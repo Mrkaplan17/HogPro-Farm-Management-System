@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
-import { Wallet, TrendingUp, BadgeDollarSign, Layers, Lock, PiggyBank, Weight, Target, Printer } from 'lucide-react'
+import { Wallet, TrendingUp, BadgeDollarSign, Layers, Lock, PiggyBank, Boxes, Target, Printer } from 'lucide-react'
 import { api } from '../api'
 import StatCard from '../components/StatCard'
 import StatusBadge from '../components/StatusBadge'
 import { useAuth } from '../auth/AuthContext'
 import { MONEY } from '../components/InsightCharts'
+import { PageSkeleton } from '../components/Skeleton'
 
 const SCOPES = [
   { key: 'all', label: 'All batches' },
@@ -68,7 +69,7 @@ export default function Dashboard() {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
   }
 
-  if (loading) return <div className="p-8 text-slate-500">Loading insights…</div>
+  if (loading) return <PageSkeleton />
   if (error && !dashboard) return <div className="p-8 text-red-500">Error: {error}</div>
   if (!dashboard) return null
 
@@ -100,7 +101,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Active Batches" value={dashboard.active_batches} sublabel={`${dashboard.closed_batches} locked in history`} icon={Layers} color="bg-slate-900" />
         <StatCard label="Current Head Count" value={dashboard.total_current_heads.toLocaleString()} sublabel="Pigs on hand (active batches)" icon={PiggyBank} color="bg-pink-600" />
-        <StatCard label="Feed Consumed" value={`${dashboard.total_feeds_consumed_kg.toLocaleString()} kg`} sublabel="Active batches, all feeds" icon={Weight} color="bg-blue-600" />
+        <StatCard label="Low Stock Alerts" value={(dashboard.low_stock_alerts || []).length} sublabel={`${(dashboard.pending_reminders || []).length} schedule reminder${(dashboard.pending_reminders || []).length === 1 ? '' : 's'} due`} icon={Boxes} color="bg-blue-600" />
         <StatCard label="Projected Revenue" value={MONEY(dashboard.projected_revenue)} sublabel="Based on recorded sales averages" icon={Target} color="bg-green-600" />
       </div>
 

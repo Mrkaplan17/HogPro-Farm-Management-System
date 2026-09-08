@@ -15,8 +15,8 @@ export function AuthProvider({ children }) {
     }
   }, [token])
 
-  const login = async (username, password) => {
-    const res = await api.login(username, password)
+  const login = async (email, password) => {
+    const res = await api.login(email, password)
     localStorage.setItem('piggery_token', res.access_token)
     localStorage.setItem('piggery_user', JSON.stringify(res.user))
     setToken(res.access_token)

@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useParams, Link } from 'react-router-dom'
-import { Plus, Trash2, Lock, Pencil, Check, X, ArrowLeft, Grid3x3, Users, Printer, Skull, Wheat } from 'lucide-react'
+import { Plus, Trash2, Lock, Pencil, Check, X, ArrowLeft, Grid3x3, Users, Printer, Skull } from 'lucide-react'
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import { useAuth } from '../auth/AuthContext'
 import { MONEY } from '../components/InsightCharts'
 import DevCredit from '../components/DevCredit'
+import { PageSkeleton } from '../components/Skeleton'
 
 const EXPENSE_CATEGORIES = ['piglets', 'feed', 'medicine', 'veterinary', 'utilities', 'labor', 'maintenance', 'misc']
-const FEED_TYPES = ['starter', 'grower', 'finisher', 'supplement', 'other']
 
 export default function GroupDetail() {
   const { id } = useParams()
@@ -17,7 +17,6 @@ export default function GroupDetail() {
   const [group, setGroup] = useState(null)
   const [expenses, setExpenses] = useState([])
   const [sales, setSales] = useState([])
-  const [feedLogs, setFeedLogs] = useState([])
   const [mortalities, setMortalities] = useState([])
   const [breakdown, setBreakdown] = useState({})
   const [tab, setTab] = useState(isAdmin ? 'ledger' : 'overview')
@@ -27,8 +26,6 @@ export default function GroupDetail() {
   const [statement, setStatement] = useState(null)
 
   const isLocked = group?.status === 'closed'
-  const feedTotalKg = feedLogs.reduce((s, f) => s + f.quantity_kg, 0)
-  const feedTotalCost = feedLogs.reduce((s, f) => s + f.cost, 0)
   const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0)
   const totalRevenue = sales.reduce((s, x) => s + x.total_revenue, 0)
   const totalHeadsLost = mortalities.reduce((s, m) => s + m.head_count, 0)
@@ -40,17 +37,15 @@ export default function GroupDetail() {
     setLoading(true)
     setError('')
     try {
-      const [g, e, f, m, s, b] = await Promise.all([
+      const [g, e, m, s, b] = await Promise.all([
         api.getBatch(id),
         api.getExpenses(id),
-        api.getFeedLogs(id),
         api.getMortalities(id),
         isAdmin ? api.getSales(id) : Promise.resolve([]),
         isAdmin ? api.getExpenseBreakdown(id) : Promise.resolve({}),
       ])
       setGroup(g)
       setExpenses(e)
-      setFeedLogs(f)
       setMortalities(m)
       setSales(s)
       setBreakdown(b)
@@ -72,12 +67,11 @@ export default function GroupDetail() {
     { key: 'overview', label: 'Overview' },
     { key: 'cages', label: `Cages (${group?.cages?.length || 0})` },
     { key: 'expenses', label: `Expenses (${expenses.length})` },
-    { key: 'feed', label: `Feed (${feedLogs.length})` },
     ...(isAdmin ? [{ key: 'sales', label: `Sales (${sales.length})` }] : []),
     { key: 'mortalities', label: `Deaths (${mortalities.length})` },
   ]
 
-  if (loading) return <div className="p-8 max-w-7xl mx-auto text-slate-500">Loading group...</div>
+  if (loading) return <PageSkeleton cards={3} />
   if (error) return <div className="p-8 max-w-7xl mx-auto text-red-500">Error: {error}</div>
   if (!group) return <div className="p-8 max-w-7xl mx-auto text-slate-500">Group not found</div>
 
@@ -143,7 +137,7 @@ export default function GroupDetail() {
             { label: 'Heads sold', value: totalHeadsSold },
             { label: 'Heads lost', value: totalHeadsLost },
             { label: 'Cages', value: group.cages?.length || 0 },
-            { label: 'Expenses', value: MONEY(totalExpenses + feedTotalCost), tone: 'red' },
+            { label: 'Expenses', value: MONEY(totalExpenses), tone: 'red' },
             { label: 'Revenue', value: MONEY(totalRevenue), tone: 'green' },
           ].map((s) => (
             <div key={s.label} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
@@ -159,11 +153,11 @@ export default function GroupDetail() {
             { label: 'Heads left', value: group.current_head_count },
             { label: 'Heads lost', value: totalHeadsLost },
             { label: 'Cages', value: group.cages?.length || 0 },
-            { label: 'Feed consumed', value: `${feedTotalKg.toLocaleString()} kg` },
+            { label: 'Expenses', value: MONEY(totalExpenses), tone: 'red' },
           ].map((s) => (
             <div key={s.label} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
               <p className="text-xs text-slate-500 font-medium">{s.label}</p>
-              <p className="text-lg font-bold mt-1 text-slate-900">{s.value}</p>
+              <p className={`text-lg font-bold mt-1 ${s.tone === 'red' ? 'text-red-600' : 'text-slate-900'}`}>{s.value}</p>
             </div>
           ))}
         </div>
@@ -189,7 +183,6 @@ export default function GroupDetail() {
         <LedgerSection
           expenses={expenses}
           sales={sales}
-          feedLogs={feedLogs}
           isLocked={isLocked}
         />
       )}
@@ -198,7 +191,6 @@ export default function GroupDetail() {
         <OverviewSection
           isAdmin={isAdmin}
           breakdown={breakdown}
-          feedLogs={feedLogs}
           expenses={expenses}
           sales={sales}
           group={group}
@@ -214,10 +206,6 @@ export default function GroupDetail() {
         <ExpensesSection batchId={id} expenses={expenses} cages={group.cages} isLocked={isLocked} isAdmin={isAdmin} loadAll={loadAll} />
       )}
 
-      {tab === 'feed' && (
-        <FeedSection batchId={id} feedLogs={feedLogs} cages={group.cages} isLocked={isLocked} isAdmin={isAdmin} loadAll={loadAll} />
-      )}
-
       {tab === 'sales' && isAdmin && (
         <SalesSection batchId={id} sales={sales} expenses={expenses} cages={group.cages} isLocked={isLocked} remainingHeads={group.current_head_count} marketPrice={group.market_price_per_kg || 140} loadAll={loadAll} />
       )}
@@ -231,21 +219,16 @@ export default function GroupDetail() {
 
 /* ─────────── OVERVIEW ─────────── */
 
-function OverviewSection({ isAdmin, breakdown, feedLogs, expenses, sales, group, totalHeadsLost }) {
+function OverviewSection({ isAdmin, breakdown, expenses, sales, group, totalHeadsLost }) {
   const expList = expenses || []
   const saleList = sales || []
-  const feedList = feedLogs || []
 
   const now = new Date()
   const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   const inMonth = (d) => String(d).substring(0, 7) === monthKey
   const monthRevenue = saleList.filter((s) => inMonth(s.sale_date)).reduce((s, x) => s + x.total_revenue, 0)
   const monthExpenses = expList.filter((e) => inMonth(e.date)).reduce((s, x) => s + x.amount, 0)
-    + feedList.filter((f) => inMonth(f.date)).reduce((s, f) => s + (f.cost || 0), 0)
   const monthNet = monthRevenue - monthExpenses
-  const totalHeadsSold = saleList.reduce((s, x) => s + x.heads_sold, 0)
-  const feedKg = feedList.reduce((s, f) => s + f.quantity_kg, 0)
-  const feedSacks = feedList.reduce((s, f) => s + (f.sacks || 0), 0)
 
   const CAT_TITLES = {
     piglets: 'Piglets (stock)', feed: 'Feed', medicine: 'Medicine', veterinary: 'Veterinary',
@@ -263,21 +246,18 @@ function OverviewSection({ isAdmin, breakdown, feedLogs, expenses, sales, group,
       id: `exp-${e.id}`, date: e.date, type: CAT_TITLES[e.category] || e.category, credit: false,
       title: e.description, amount: e.amount,
     })),
-    ...feedList.map((f) => ({
-      id: `feed-${f.id}`, date: f.date, type: 'Feed', credit: false,
-      title: `${f.quantity_kg} kg ${f.feed_type}`, amount: f.cost || 0,
-    })),
   ].sort((a, b) => (b.date < a.date ? -1 : b.date > a.date ? 1 : 0)).slice(0, 8)
 
   if (!isAdmin) {
+    const recentExpenses = expList.slice(0, 8)
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[
             { label: 'Heads left', value: group.current_head_count },
             { label: 'Heads lost', value: totalHeadsLost },
-            { label: 'Feed used', value: `${feedKg.toLocaleString()} kg` },
-            { label: 'Feed sacks', value: feedSacks.toLocaleString() },
+            { label: 'Cages', value: group.cages?.length || 0 },
+            { label: 'Total expenses', value: MONEY(expList.reduce((s, e) => s + e.amount, 0)) },
           ].map((s) => (
             <div key={s.label} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
               <p className="text-xs text-slate-500 font-medium">{s.label}</p>
@@ -288,35 +268,31 @@ function OverviewSection({ isAdmin, breakdown, feedLogs, expenses, sales, group,
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="px-5 py-4 border-b flex items-center justify-between">
             <div>
-              <h2 className="font-semibold text-slate-900">Feed Logs</h2>
-              <p className="text-sm text-slate-500">Recent feed consumption in this group.</p>
+              <h2 className="font-semibold text-slate-900">Expenses</h2>
+              <p className="text-sm text-slate-500">Latest expenses recorded in this group.</p>
             </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50">
-                <tr className="text-left text-slate-500">
-                  <th className="py-3 px-5">Date</th>
-                  <th className="py-3 px-5">Type</th>
-                  <th className="py-3 px-5 text-right">Quantity (kg)</th>
-                  <th className="py-3 px-5 text-right">Sacks</th>
-                  <th className="py-3 px-5">Notes</th>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50">
+              <tr className="text-left text-slate-500">
+                <th className="py-3 px-5">Date</th>
+                <th className="py-3 px-5">Category</th>
+                <th className="py-3 px-5">Description</th>
+                <th className="py-3 px-5 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentExpenses.length === 0 && <tr><td colSpan="4" className="py-12 text-center text-slate-400">No expenses recorded yet.</td></tr>}
+              {recentExpenses.map((e) => (
+                <tr key={e.id} className="border-t border-slate-100">
+                  <td className="py-3 px-5">{new Date(e.date).toLocaleDateString()}</td>
+                  <td className="py-3 px-5"><span className="px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-700 capitalize">{CAT_TITLES[e.category] || e.category}</span></td>
+                  <td className="py-3 px-5 text-slate-600">{e.description}</td>
+                  <td className="py-3 px-5 text-right text-red-600 font-medium">{MONEY(e.amount)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {feedList.length === 0 && <tr><td colSpan="5" className="py-12 text-center text-slate-400">No feed logs yet.</td></tr>}
-                {feedList.slice(0, 8).map((f) => (
-                  <tr key={f.id} className="border-t border-slate-100">
-                    <td className="py-3 px-5">{new Date(f.date).toLocaleDateString()}</td>
-                    <td className="py-3 px-5"><span className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">{f.feed_type}</span></td>
-                    <td className="py-3 px-5 text-right">{f.quantity_kg} kg</td>
-                    <td className="py-3 px-5 text-right">{f.sacks > 0 ? f.sacks : '—'}</td>
-                    <td className="py-3 px-5 text-slate-600">{f.notes || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     )
@@ -393,7 +369,7 @@ function OverviewSection({ isAdmin, breakdown, feedLogs, expenses, sales, group,
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="px-5 py-4 border-b">
           <h2 className="font-semibold text-slate-900">Recent Activity</h2>
-          <p className="text-sm text-slate-500">Latest sales, expenses and feed logs.</p>
+          <p className="text-sm text-slate-500">Latest sales and expenses.</p>
         </div>
         <table className="w-full text-sm">
           <thead className="bg-slate-50">
@@ -410,13 +386,13 @@ function OverviewSection({ isAdmin, breakdown, feedLogs, expenses, sales, group,
               <tr key={r.id} className="border-t border-slate-100">
                 <td className="py-3 px-5">{new Date(r.date).toLocaleDateString()}</td>
                 <td className="py-3 px-5">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.credit ? 'bg-green-100 text-green-700' : r.type === 'Feed' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.credit ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-700'}`}>
                     {r.type}
                   </span>
                 </td>
                 <td className="py-3 px-5 text-slate-600">{r.title}</td>
                 <td className={`py-3 px-5 text-right font-medium ${r.credit ? 'text-green-600' : 'text-red-600'}`}>
-                  {r.type === 'Feed' && r.amount === 0 ? '—' : `${r.credit ? '+' : '−'}${MONEY(r.amount)}`}
+                  {`${r.credit ? '+' : '−'}${MONEY(r.amount)}`}
                 </td>
               </tr>
             ))}
@@ -429,7 +405,7 @@ function OverviewSection({ isAdmin, breakdown, feedLogs, expenses, sales, group,
 
 /* ─────────── LEDGER ─────────── */
 
-function LedgerSection({ expenses, sales, feedLogs, isLocked }) {
+function LedgerSection({ expenses, sales, isLocked }) {
   const rows = [
     ...sales.map((s) => ({
       id: `sale-${s.id}`,
@@ -449,15 +425,6 @@ function LedgerSection({ expenses, sales, feedLogs, isLocked }) {
       extra: '',
       amount: e.amount,
     })),
-    ...feedLogs.map((f) => ({
-      id: `feed-${f.id}`,
-      date: f.date,
-      type: 'debit',
-      title: 'feed',
-      detail: `${f.quantity_kg}kg ${f.feed_type}${f.cage_id ? ' · cage' : ''}${f.sacks ? ` · ${f.sacks} sacks` : ''}`,
-      extra: f.notes || '',
-      amount: f.cost,
-    })),
   ].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
 
   let running = 0
@@ -469,7 +436,6 @@ function LedgerSection({ expenses, sales, feedLogs, isLocked }) {
 
   const totalCredit = sales.reduce((s, x) => s + x.total_revenue, 0)
   const totalDebit = expenses.reduce((s, x) => s + x.amount, 0)
-    + feedLogs.reduce((s, f) => s + f.cost, 0)
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -511,7 +477,7 @@ function LedgerSection({ expenses, sales, feedLogs, isLocked }) {
               <tr key={r.id} className="border-t border-slate-100">
                 <td className="py-3 px-5 whitespace-nowrap">{new Date(r.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}</td>
                 <td className="py-3 px-5">
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.type === 'credit' ? 'bg-green-100 text-green-700' : r.title === 'feed' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.type === 'credit' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-700'}`}>
                     {r.type === 'credit' ? 'Sale' : r.title.charAt(0).toUpperCase() + r.title.slice(1)}
                   </span>
                 </td>
@@ -773,110 +739,6 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
           ]}
           onDelete={!isAdmin ? null : isLocked ? null : async (e) => {
             if (confirm('Delete this expense?')) { await api.deleteExpense(e.id); loadAll() }
-          }}
-        />
-      </SectionCard>
-    </div>
-  )
-}
-
-/* ─────────── FEED ─────────── */
-
-function FeedSection({ batchId, feedLogs, cages, isLocked, isAdmin, loadAll }) {
-  const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ date: new Date().toISOString().split('T')[0], feed_type: 'grower', quantity_kg: '', sacks: '', cage_id: '', notes: '' })
-  const totalKg = feedLogs.reduce((s, f) => s + f.quantity_kg, 0)
-  const totalSacks = feedLogs.reduce((s, f) => s + (f.sacks || 0), 0)
-
-  async function submit(e) {
-    e.preventDefault()
-    try {
-      await api.createFeedLog({
-        batch_id: parseInt(batchId),
-        cage_id: form.cage_id ? parseInt(form.cage_id) : null,
-        date: form.date,
-        feed_type: form.feed_type,
-        quantity_kg: parseFloat(form.quantity_kg),
-        sacks: form.sacks ? parseFloat(form.sacks) : 0,
-        notes: form.notes,
-      })
-      setShowForm(false)
-      setForm({ date: new Date().toISOString().split('T')[0], feed_type: 'grower', quantity_kg: '', sacks: '', cage_id: '', notes: '' })
-      loadAll()
-    } catch (err) { alert(err.message) }
-  }
-
-  return (
-    <div className="space-y-4">
-      {isLocked && <LockedNotice />}
-      {!isLocked && (
-        <div className="flex justify-end">
-          <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
-            <Wheat className="w-4 h-4" /> Log Feed
-          </button>
-        </div>
-      )}
-      {showForm && !isLocked && (
-        <form onSubmit={submit} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>
-              <input required type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Feed Type</label>
-              <select value={form.feed_type} onChange={(e) => setForm({ ...form, feed_type: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                {FEED_TYPES.map((t) => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Sacks (sako)</label>
-              <input type="number" step="0.1" min="0" value={form.sacks} onChange={(e) => setForm({ ...form, sacks: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. 2" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Quantity (kg)</label>
-              <input required type="number" step="0.1" min="0.1" value={form.quantity_kg} onChange={(e) => setForm({ ...form, quantity_kg: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Cage (optional)</label>
-              <select value={form.cage_id} onChange={(e) => setForm({ ...form, cage_id: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                <option value="">All cages</option>
-                {(cages || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-              <input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-            </div>
-          </div>
-          <p className="text-sm text-slate-500">Feed purchase costs are recorded under Expenses → category “Feed”. This log tracks consumption in sacks and kg.</p>
-          <div className="flex justify-end gap-2">
-            <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-slate-600 border border-slate-300 rounded-lg">Cancel</button>
-            <button type="submit" className="px-5 py-2 text-sm text-white bg-amber-500 hover:bg-amber-600 rounded-lg font-semibold">Save Feed Log</button>
-          </div>
-        </form>
-      )}
-
-      <SectionCard
-        title="Feed logs"
-        right={<span className="text-slate-600"><strong className="text-slate-900">{totalKg.toLocaleString()} kg</strong> · <strong className="text-amber-600">{totalSacks.toLocaleString()} sacks</strong></span>}
-      >
-        <DataTable
-          headers={['Date', 'Type', 'Sacks', 'Quantity', 'Cage', 'Notes']}
-          rows={feedLogs}
-          locked={isLocked}
-          empty="No feed logs recorded for this group."
-          alignRight={['Sacks', 'Quantity']}
-          renderRow={(f) => [
-            new Date(f.date).toLocaleDateString(),
-            <span key="t" className="px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-700">{f.feed_type}</span>,
-            f.sacks > 0 ? `${f.sacks} sacks` : '—',
-            `${f.quantity_kg} kg`,
-            cages?.find((c) => c.id === f.cage_id)?.name || 'All',
-            f.notes || '—',
-          ]}
-          onDelete={!isAdmin ? null : isLocked ? null : async (f) => {
-            if (confirm('Delete this feed log?')) { await api.deleteFeedLog(f.id); loadAll() }
           }}
         />
       </SectionCard>
@@ -1306,7 +1168,7 @@ function ReportOverlay({ statement, batchName, ownerName, onClose }) {
                 <Row label="Total revenue" value={`₱${b.total_revenue.toLocaleString()}`} green />
                 <Row label="Piglets (stock)" value={`₱${(b.piglet_cost || 0).toLocaleString()}`} red />
                 <Row label="Other expenses" value={`₱${(b.other_expenses - (b.piglet_cost || 0)).toLocaleString()}`} red />
-                <Row label="Feed cost" value={`₱${b.feed_cost.toLocaleString()} (${b.feed_kg.toLocaleString()} kg)`} red />
+                <Row label="Feed cost" value={`₱${(b.feed_cost || 0).toLocaleString()}`} red />
                 <Row label="Total expenses" value={`₱${b.total_expenses.toLocaleString()}`} red bold />
                 <Row label="Net income" value={`₱${b.net_income.toLocaleString()}`} bold green={b.net_income >= 0} red={b.net_income < 0} />
                 <Row label="Profit margin" value={`${b.profit_margin_pct}%`} bold />

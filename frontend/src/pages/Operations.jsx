@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { Plus, Lock, Trash2, Pencil, Check, X, Grid3x3, Users } from 'lucide-react'
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge'
+import { TableSkeleton } from '../components/Skeleton'
 
 const EMPTY_CAGE = { name: '', head_count: '' }
 
@@ -254,7 +255,7 @@ export default function Operations() {
       </div>
 
       {loading ? (
-        <div className="text-slate-500 py-16 text-center">Loading...</div>
+        <TableSkeleton rows={5} cols={4} />
       ) : groups.length === 0 ? (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-16 text-center">
           <p className="text-slate-400">No groups yet. Create your first group to get started.</p>

@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16
+    container_name: piggery-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: piggery
+      POSTGRES_PASSWORD: piggery
+      POSTGRES_DB: piggery
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - piggery_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U piggery -d piggery"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: piggery-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: piggery@local.dev
+      PGADMIN_DEFAULT_PASSWORD: piggery
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "127.0.0.1:5050:80"
+    volumes:
+      - piggery_pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  piggery_pgdata:
+  piggery_pgadmin_data:

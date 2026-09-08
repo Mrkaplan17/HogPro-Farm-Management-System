@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Float, String, Date, DateTime, Boolean, ForeignKey, Text
+from sqlalchemy import Column, Integer, Float, String, Date, DateTime, Boolean, ForeignKey, Text, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import enum
@@ -19,8 +19,52 @@ class ExpenseCategory(str, enum.Enum):
     UTILITIES = "utilities"
     LABOR = "labor"
     MAINTENANCE = "maintenance"
+    INVENTORY = "inventory"
     MISC = "misc"
 
+
+class InventoryCategory(str, enum.Enum):
+    FEED = "feed"
+    MEDICINE = "medicine"
+    VITAMIN = "vitamin"
+    SUPPLIES = "supplies"
+
+
+class TransactionType(str, enum.Enum):
+    RESTOCK = "restock"
+    ISSUE = "issue"
+
+
+class SubscriptionStatus(str, enum.Enum):
+    FREE = "free"
+    PRO = "pro"
+    SUSPENDED = "suspended"
+
+
+# ─── USERS (auth / onboarding / subscription hook) ───────────────────
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    username = Column(String(50), unique=True, nullable=True, index=True)
+    password_hash = Column(String(255), nullable=True)          # None for OAuth-only accounts
+    full_name = Column(String(100), default="")
+    farm_name = Column(String(120), default="")
+    role = Column(String(20), default="worker")                 # admin | worker
+    is_active = Column(Boolean, default=True)
+    subscription_status = Column(String(20), default=SubscriptionStatus.FREE.value)
+    is_onboarded = Column(Boolean, default=False)
+    google_sub = Column(String(100), unique=True, nullable=True)
+    reset_token = Column(String(255), nullable=True)
+    reset_token_expires = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    expenses = relationship("Expense", back_populates="recorded_by", foreign_keys="Expense.recorded_by_id")
+
+
+# ─── PRODUCTION: BATCH / PIGPEN TRACKING ────────────────────────────
 
 class Batch(Base):
     __tablename__ = "batches"
@@ -40,19 +84,9 @@ class Batch(Base):
     cages = relationship("Cage", back_populates="batch", cascade="all, delete-orphan", order_by="Cage.id")
     expenses = relationship("Expense", back_populates="batch", cascade="all, delete-orphan")
     sales = relationship("Sale", back_populates="batch", cascade="all, delete-orphan")
-    feed_logs = relationship("FeedLog", back_populates="batch", cascade="all, delete-orphan")
     mortalities = relationship("Mortality", back_populates="batch", cascade="all, delete-orphan")
-
-
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(50), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
-    full_name = Column(String(100), default="")
-    role = Column(String(20), default="worker")  # admin | worker
-    created_at = Column(DateTime, default=datetime.utcnow)
+    vitamin_logs = relationship("VitaminLog", back_populates="batch")
+    transactions = relationship("InventoryTransaction", back_populates="batch")
 
 
 class Cage(Base):
@@ -67,24 +101,7 @@ class Cage(Base):
     batch = relationship("Batch", back_populates="cages")
 
 
-class Expense(Base):
-    __tablename__ = "expenses"
-
-    id = Column(Integer, primary_key=True, index=True)
-    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=False)
-    category = Column(String(50), nullable=False)
-    description = Column(String(255), nullable=False)
-    quantity = Column(Float, default=1.0)
-    unit_price = Column(Float, default=0.0)
-    amount = Column(Float, nullable=False)
-    date = Column(Date, nullable=False)
-    cage_id = Column(Integer, ForeignKey("cages.id"), nullable=True)
-    head_count = Column(Integer, nullable=True)
-    recorded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    batch = relationship("Batch", back_populates="expenses")
-
+# ─── PRODUCTION: OPERATIONAL LOGS ───────────────────────────────────
 
 class Sale(Base):
     __tablename__ = "sales"
@@ -124,27 +141,6 @@ class SaleItem(Base):
     sale = relationship("Sale", back_populates="items")
 
 
-class FeedLog(Base):
-    """Daily feed consumption per batch (optionally per cage). Cost is captured
-    through piglets/feed expense entries; this table only tracks consumption."""
-
-    __tablename__ = "feed_logs"
-
-    id = Column(Integer, primary_key=True, index=True)
-    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=False)
-    cage_id = Column(Integer, ForeignKey("cages.id"), nullable=True)
-    date = Column(Date, nullable=False)
-    feed_type = Column(String(50), default="grower")
-    sacks = Column(Float, default=0.0)
-    quantity_kg = Column(Float, default=0.0)
-    cost = Column(Float, default=0.0)
-    notes = Column(Text, default="")
-    recorded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    batch = relationship("Batch", back_populates="feed_logs")
-
-
 class Mortality(Base):
     __tablename__ = "mortalities"
 
@@ -159,3 +155,126 @@ class Mortality(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     batch = relationship("Batch", back_populates="mortalities")
+
+
+# ─── EXPENSES: FINANCIAL LEDGER ─────────────────────────────────────
+
+class Expense(Base):
+    __tablename__ = "expenses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)   # optional (general ledger)
+    category = Column(String(50), nullable=False)
+    description = Column(String(255), nullable=False)
+    quantity = Column(Float, default=1.0)
+    unit_price = Column(Float, default=0.0)
+    amount = Column(Float, nullable=False)
+    date = Column(Date, nullable=False)
+    cage_id = Column(Integer, ForeignKey("cages.id"), nullable=True)
+    head_count = Column(Integer, nullable=True)
+    source = Column(String(20), default="manual")                # manual | inventory
+    inventory_item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=True)
+    recorded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    batch = relationship("Batch", back_populates="expenses")
+    inventory_item = relationship("InventoryItem", foreign_keys=[inventory_item_id])
+    recorded_by = relationship("User", foreign_keys=[recorded_by_id])
+
+    __table_args__ = (Index("ix_expenses_batch_date", "batch_id", "date"),)
+
+
+# ─── INVENTORY: FEEDS / MEDICINES / VITAMINS ────────────────────────
+
+class InventoryItem(Base):
+    __tablename__ = "inventory_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False)
+    category = Column(String(20), nullable=False)                # feed | medicine | vitamin | supplies
+    unit = Column(String(20), default="kg")                     # kg | sack | bottle | vial | ml | piece
+    stock_qty = Column(Float, default=0.0)
+    threshold_qty = Column(Float, default=0.0)
+    unit_cost = Column(Float, default=0.0)
+    supplier = Column(String(120), default="")
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_restocked_at = Column(DateTime, nullable=True)
+
+    transactions = relationship("InventoryTransaction", back_populates="item", cascade="all, delete-orphan", order_by="InventoryTransaction.id")
+
+
+class InventoryTransaction(Base):
+    __tablename__ = "inventory_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
+    type = Column(String(10), nullable=False)                   # restock | issue
+    qty = Column(Float, nullable=False)
+    unit_cost = Column(Float, default=0.0)
+    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
+    notes = Column(Text, default="")
+    creates_expense = Column(Boolean, default=False)
+    expense_id = Column(Integer, ForeignKey("expenses.id"), nullable=True)
+    recorded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    item = relationship("InventoryItem", back_populates="transactions")
+    batch = relationship("Batch", back_populates="transactions")
+    expense = relationship("Expense", foreign_keys=[expense_id])
+
+
+# ─── VITAMINS / HEALTH SCHEDULE ─────────────────────────────────────
+
+class VitaminLog(Base):
+    __tablename__ = "vitamin_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
+    cage_id = Column(Integer, ForeignKey("cages.id"), nullable=True)
+    vitamin_name = Column(String(120), nullable=False)
+    dosage = Column(Float, default=0.0)
+    unit = Column(String(20), default="ml")                     # ml | cc | dose | mg
+    date_administered = Column(Date, nullable=False)
+    next_due_date = Column(Date, nullable=True)
+    notes = Column(Text, default="")
+    recorded_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    batch = relationship("Batch", back_populates="vitamin_logs")
+
+
+class Reminder(Base):
+    """Future schedule entries / calendar reminders (vitamin schedules, tasks)."""
+
+    __tablename__ = "reminders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(150), nullable=False)
+    description = Column(Text, default="")
+    reminder_type = Column(String(20), default="general")       # vitamin | general
+    batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
+    due_date = Column(Date, nullable=False)
+    status = Column(String(20), default="pending")              # pending | done | cancelled
+    recurring = Column(Boolean, default=False)
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    batch = relationship("Batch")
+
+
+# ─── CONTACT / FEEDBACK ─────────────────────────────────────────────
+
+class ContactMessage(Base):
+    __tablename__ = "contact_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    subject = Column(String(200), nullable=False)
+    message = Column(Text, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status = Column(String(20), default="received")             # received | sent | failed
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User")

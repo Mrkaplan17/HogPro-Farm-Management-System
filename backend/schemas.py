@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr, field_validator
 from typing import Optional, List
 from datetime import date, datetime
 from enum import Enum
@@ -22,27 +22,65 @@ class ExpenseCategory(str, Enum):
     UTILITIES = "utilities"
     LABOR = "labor"
     MAINTENANCE = "maintenance"
+    INVENTORY = "inventory"
     MISC = "misc"
 
 
-# ─── AUTH ───────────────────────────────────────────────────────────
+class InventoryCategory(str, Enum):
+    FEED = "feed"
+    MEDICINE = "medicine"
+    VITAMIN = "vitamin"
+    SUPPLIES = "supplies"
 
-class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
+
+class TransactionType(str, Enum):
+    RESTOCK = "restock"
+    ISSUE = "issue"
+
+
+# ─── AUTH & ONBOARDING ─────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
     password: str = Field(..., min_length=6, max_length=100)
     full_name: str = Field("", max_length=100)
 
 
 class LoginRequest(BaseModel):
-    username: str
+    email: EmailStr
     password: str
+
+
+class GoogleLoginRequest(BaseModel):
+    """Google OAuth 2.0 credential (id_token or short-lived access_token)."""
+    credential: str = Field(..., min_length=1)
+    mode: str = Field("id_token", pattern="^(id_token|access_token)$")
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(..., min_length=6, max_length=100)
+
+
+class OnboardRequest(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=100)
+    farm_name: str = Field("", max_length=120)
 
 
 class UserOut(BaseModel):
     id: int
-    username: str
+    email: str
+    username: Optional[str] = None
     full_name: str
+    farm_name: str
     role: str
+    is_active: bool
+    subscription_status: str
+    is_onboarded: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -54,7 +92,7 @@ class TokenResponse(BaseModel):
     user: UserOut
 
 
-# ─── BATCH ──────────────────────────────────────────────────────────
+# ─── BATCH / PRODUCTION ─────────────────────────────────────────────
 
 class CageCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
@@ -77,7 +115,7 @@ class CageResponse(BaseModel):
 
 class BatchCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    initial_head_count: int = Field(..., gt=0)
+    initial_head_count: int = Field(0, ge=0)
     start_date: date
     market_price_per_kg: Optional[float] = Field(140.0, gt=0)
     notes: Optional[str] = ""
@@ -107,10 +145,10 @@ class BatchResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ─── EXPENSE ────────────────────────────────────────────────────────
+# ─── EXPENSES LEDGER ────────────────────────────────────────────────
 
 class ExpenseCreate(BaseModel):
-    batch_id: int
+    batch_id: Optional[int] = None
     category: ExpenseCategory
     description: str = Field(..., min_length=1, max_length=255)
     quantity: Optional[float] = Field(None, gt=0)
@@ -119,9 +157,16 @@ class ExpenseCreate(BaseModel):
     date: date
     cage_id: Optional[int] = None
     head_count: Optional[int] = Field(None, ge=1)
+    inventory_item_id: Optional[int] = None
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def _amount_default(cls, v):
+        return v  # amount computed server-side when omitted
 
 
 class ExpenseUpdate(BaseModel):
+    batch_id: Optional[int] = None
     category: Optional[ExpenseCategory] = None
     description: Optional[str] = Field(None, min_length=1, max_length=255)
     quantity: Optional[float] = Field(None, gt=0)
@@ -134,7 +179,7 @@ class ExpenseUpdate(BaseModel):
 
 class ExpenseResponse(BaseModel):
     id: int
-    batch_id: int
+    batch_id: Optional[int] = None
     category: str
     description: str
     quantity: float
@@ -143,12 +188,14 @@ class ExpenseResponse(BaseModel):
     date: date
     cage_id: Optional[int] = None
     head_count: Optional[int] = None
+    source: str
+    inventory_item_id: Optional[int] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-# ─── SALE + ITEMS ───────────────────────────────────────────────────
+# ─── SALES ──────────────────────────────────────────────────────────
 
 class SaleItemCreate(BaseModel):
     cage_id: Optional[int] = None
@@ -218,42 +265,6 @@ class SaleResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ─── FEED LOG ───────────────────────────────────────────────────────
-
-class FeedLogCreate(BaseModel):
-    batch_id: int
-    cage_id: Optional[int] = None
-    date: date
-    feed_type: str = Field("grower", min_length=1, max_length=50)
-    sacks: Optional[float] = Field(0.0, ge=0)
-    quantity_kg: Optional[float] = Field(0.0, ge=0)
-    notes: Optional[str] = ""
-
-
-class FeedLogUpdate(BaseModel):
-    cage_id: Optional[int] = None
-    date: Optional[date] = None
-    feed_type: Optional[str] = Field(None, min_length=1, max_length=50)
-    sacks: Optional[float] = Field(None, ge=0)
-    quantity_kg: Optional[float] = Field(None, ge=0)
-    notes: Optional[str] = None
-
-
-class FeedLogResponse(BaseModel):
-    id: int
-    batch_id: int
-    cage_id: Optional[int] = None
-    date: date
-    feed_type: str
-    sacks: float
-    quantity_kg: float
-    cost: float
-    notes: str
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
 # ─── MORTALITY ──────────────────────────────────────────────────────
 
 class MortalityCreate(BaseModel):
@@ -286,6 +297,185 @@ class MortalityResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ─── INVENTORY ──────────────────────────────────────────────────────
+
+class InventoryItemCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    category: InventoryCategory
+    unit: str = Field("kg", max_length=20)
+    stock_qty: Optional[float] = Field(0.0, ge=0)
+    threshold_qty: Optional[float] = Field(0.0, ge=0)
+    unit_cost: Optional[float] = Field(0.0, ge=0)
+    supplier: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class InventoryItemUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    category: Optional[InventoryCategory] = None
+    unit: Optional[str] = Field(None, max_length=20)
+    threshold_qty: Optional[float] = Field(None, ge=0)
+    unit_cost: Optional[float] = Field(None, ge=0)
+    supplier: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class InventoryItemResponse(BaseModel):
+    id: int
+    name: str
+    category: str
+    unit: str
+    stock_qty: float
+    threshold_qty: float
+    unit_cost: float
+    supplier: str
+    notes: str
+    is_low_stock: bool
+    created_at: datetime
+    updated_at: datetime
+    last_restocked_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class RestockRequest(BaseModel):
+    qty: float = Field(..., gt=0)
+    unit_cost: Optional[float] = Field(None, ge=0)
+    batch_id: Optional[int] = None
+    notes: Optional[str] = ""
+    create_expense: Optional[bool] = False
+
+
+class IssueRequest(BaseModel):
+    qty: float = Field(..., gt=0)
+    batch_id: Optional[int] = None
+    notes: Optional[str] = ""
+    create_expense: Optional[bool] = False
+
+
+class InventoryTransactionResponse(BaseModel):
+    id: int
+    item_id: int
+    type: str
+    qty: float
+    unit_cost: float
+    batch_id: Optional[int] = None
+    notes: str
+    creates_expense: bool
+    expense_id: Optional[int] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class LowStockAlert(BaseModel):
+    item: InventoryItemResponse
+    status: str  # "low" | "critical"
+
+
+class ReminderItem(BaseModel):
+    id: int
+    title: str
+    description: str
+    reminder_type: str
+    batch_id: Optional[int] = None
+    due_date: date
+    status: str
+    recurring: bool
+
+    model_config = {"from_attributes": True}
+
+
+# ─── VITAMINS / HEALTH SCHEDULE ─────────────────────────────────────
+
+class VitaminLogCreate(BaseModel):
+    batch_id: Optional[int] = None
+    cage_id: Optional[int] = None
+    vitamin_name: str = Field(..., min_length=1, max_length=120)
+    dosage: Optional[float] = Field(0.0, ge=0)
+    unit: str = Field("ml", max_length=20)
+    date_administered: date
+    next_due_date: Optional[date] = None
+    notes: Optional[str] = ""
+    create_reminder: Optional[bool] = False
+
+
+class VitaminLogUpdate(BaseModel):
+    batch_id: Optional[int] = None
+    cage_id: Optional[int] = None
+    vitamin_name: Optional[str] = Field(None, min_length=1, max_length=120)
+    dosage: Optional[float] = Field(None, ge=0)
+    unit: Optional[str] = Field(None, max_length=20)
+    date_administered: Optional[date] = None
+    next_due_date: Optional[date] = None
+    notes: Optional[str] = None
+
+
+class VitaminLogResponse(BaseModel):
+    id: int
+    batch_id: Optional[int] = None
+    cage_id: Optional[int] = None
+    vitamin_name: str
+    dosage: float
+    unit: str
+    date_administered: date
+    next_due_date: Optional[date] = None
+    notes: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ReminderCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=150)
+    description: Optional[str] = ""
+    reminder_type: str = Field("general", pattern="^(vitamin|general)$")
+    batch_id: Optional[int] = None
+    due_date: date
+    recurring: Optional[bool] = False
+
+
+class ReminderUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=150)
+    description: Optional[str] = None
+    reminder_type: Optional[str] = Field(None, pattern="^(vitamin|general)$")
+    batch_id: Optional[int] = None
+    due_date: Optional[date] = None
+    status: Optional[str] = Field(None, pattern="^(pending|done|cancelled)$")
+    recurring: Optional[bool] = None
+
+
+class ReminderResponse(BaseModel):
+    id: int
+    title: str
+    description: str
+    reminder_type: str
+    batch_id: Optional[int] = None
+    due_date: date
+    status: str
+    recurring: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ─── CONTACT ────────────────────────────────────────────────────────
+
+class ContactCreate(BaseModel):
+    subject: str = Field(..., min_length=3, max_length=200)
+    message: str = Field(..., min_length=10, max_length=5000)
+
+
+class ContactResponse(BaseModel):
+    id: int
+    subject: str
+    user_id: Optional[int] = None
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # ─── DASHBOARD / REPORTS ────────────────────────────────────────────
 
 class GrowthPoint(BaseModel):
@@ -297,7 +487,6 @@ class BatchSummary(BaseModel):
     batch: BatchResponse
     total_expenses: float
     feed_cost: float
-    feed_quantity_kg: float
     other_expenses: float
     total_revenue: float
     net_profit: float
@@ -305,7 +494,6 @@ class BatchSummary(BaseModel):
     profit_margin_pct: float
     cost_per_head: float
     profit_per_head: float
-    feed_cost_per_kg_sold: float
     avg_selling_price_kg: float
     avg_live_weight_kg: float
     total_weight_sold: float
@@ -324,11 +512,12 @@ class DashboardOverview(BaseModel):
     active_batches: int
     closed_batches: int
     total_current_heads: int
-    total_feeds_consumed_kg: float
     projected_revenue: float
     total_expenses: float
     total_revenue: float
     total_profit: float
+    low_stock_alerts: List[LowStockAlert]
+    pending_reminders: List[ReminderItem]
     batches: List[BatchSummary]
 
 
@@ -345,7 +534,6 @@ class Statement(BaseModel):
     heads_sold: int
     heads_remaining: int
     heads_lost: int
-    feed_kg: float
     feed_cost: float
     avg_selling_price_kg: float
     piglet_cost: float

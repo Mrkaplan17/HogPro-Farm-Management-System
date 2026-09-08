@@ -1,57 +1,46 @@
+import json
+import os
+import secrets
+import urllib.parse
+import urllib.request
+from datetime import date, datetime, timedelta
+
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, selectinload
 from typing import List, Optional
-from datetime import date, datetime
-import os
 
 from database import engine, get_db, Base, DATABASE_URL
-from models import Batch, Cage, Expense, Sale, SaleItem, FeedLog, Mortality, User, BatchStatus, ExpenseCategory
-from security import hash_password, verify_password, create_access_token, get_current_user, require_admin
+from models import (
+    Batch, Cage, Expense, Sale, SaleItem, Mortality, User,
+    InventoryItem, InventoryTransaction, VitaminLog, Reminder, ContactMessage,
+    BatchStatus, ExpenseCategory, InventoryCategory, TransactionType,
+)
+from security import (
+    hash_password, verify_password, create_access_token,
+    get_current_user, require_admin,
+)
 from schemas import (
-    UserCreate, LoginRequest, UserOut, TokenResponse,
+    RegisterRequest, LoginRequest, GoogleLoginRequest, ForgotPasswordRequest,
+    ResetPasswordRequest, OnboardRequest, UserOut, TokenResponse,
     BatchCreate, BatchUpdate, BatchResponse,
     CageCreate, CageUpdate, CageResponse,
     ExpenseCreate, ExpenseUpdate, ExpenseResponse,
     SaleCreate, SaleUpdate, SaleResponse,
-    FeedLogCreate, FeedLogUpdate, FeedLogResponse,
     MortalityCreate, MortalityUpdate, MortalityResponse,
+    InventoryItemCreate, InventoryItemUpdate, InventoryItemResponse,
+    RestockRequest, IssueRequest, InventoryTransactionResponse,
+    VitaminLogCreate, VitaminLogUpdate, VitaminLogResponse,
+    ReminderCreate, ReminderUpdate, ReminderResponse, ReminderItem,
+    ContactCreate, ContactResponse,
     BatchSummary, DashboardOverview, Statement, GrowthPoint,
 )
+from emailer import send_email, contact_recipient
+
 
 Base.metadata.create_all(bind=engine)
 
-
-def _ensure_columns():
-    """Lightweight migration for SQLite: add new columns to existing tables."""
-    if not DATABASE_URL.startswith("sqlite"):
-        return
-    with engine.begin() as conn:
-        def has_column(table, col):
-            rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
-            return any(r[1] == col for r in rows)
-
-        if not has_column("expenses", "cage_id"):
-            conn.exec_driver_sql("ALTER TABLE expenses ADD COLUMN cage_id INTEGER")
-        if not has_column("expenses", "head_count"):
-            conn.exec_driver_sql("ALTER TABLE expenses ADD COLUMN head_count INTEGER")
-        if not has_column("expenses", "quantity"):
-            conn.exec_driver_sql("ALTER TABLE expenses ADD COLUMN quantity FLOAT DEFAULT 1.0")
-        if not has_column("expenses", "unit_price"):
-            conn.exec_driver_sql("ALTER TABLE expenses ADD COLUMN unit_price FLOAT DEFAULT 0.0")
-        if not has_column("sale_items", "mode"):
-            conn.exec_driver_sql("ALTER TABLE sale_items ADD COLUMN mode VARCHAR(10) DEFAULT 'per_kilo'")
-        if not has_column("sale_items", "price_per_head"):
-            conn.exec_driver_sql("ALTER TABLE sale_items ADD COLUMN price_per_head FLOAT DEFAULT 0")
-        if not has_column("feed_logs", "sacks"):
-            conn.exec_driver_sql("ALTER TABLE feed_logs ADD COLUMN sacks FLOAT DEFAULT 0")
-        if not has_column("batches", "closed_at"):
-            conn.exec_driver_sql("ALTER TABLE batches ADD COLUMN closed_at DATETIME")
-
-
-_ensure_columns()
-
-app = FastAPI(title="HogPros API — Farm Management & Batch Profitability", version="2.0.0")
+app = FastAPI(title="HogPros API — Farm Management & Batch Profitability", version="3.0.0")
 
 _default_origins = ["http://localhost:5173", "http://localhost:3000"]
 _origins_env = os.environ.get("CORS_ORIGINS")
@@ -64,6 +53,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────
@@ -90,9 +82,6 @@ def _sync_head_counts(batch):
 
 
 def _deduct_heads(batch, heads, cage_id=None):
-    """Reduce inventory by `heads`. With a specific cage, the deduction must
-    be fully covered by that cage; otherwise heads are taken from any cage
-    (then batch-level). Rejects any request exceeding what is available."""
     requested = max(0, heads)
     total_available = batch.current_head_count
     if requested > total_available:
@@ -129,20 +118,25 @@ def _restore_heads(batch, heads, cage_id=None):
     _sync_head_counts(batch)
 
 
+def _item_or_404(item_id, db):
+    item = db.query(InventoryItem).filter(InventoryItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Inventory item not found")
+    return item
+
+
+# ─── FINANCIALS / STATEMENT (no legacy feed-consumption) ────────────
+
 def _batch_financials(db, batch):
     expenses = db.query(Expense).filter(Expense.batch_id == batch.id).all()
-    feeds = db.query(FeedLog).filter(FeedLog.batch_id == batch.id).all()
     sales = db.query(Sale).filter(Sale.batch_id == batch.id).options(selectinload(Sale.items)).all()
     mortalities = db.query(Mortality).filter(Mortality.batch_id == batch.id).all()
 
-    feed_purchases = sum(e.amount for e in expenses if e.category == ExpenseCategory.FEED.value)
+    feed_cost = sum(e.amount for e in expenses if e.category == ExpenseCategory.FEED.value)
     piglet_expenses = [e for e in expenses if e.category == ExpenseCategory.PIGLETS.value]
     piglet_cost = sum(e.amount for e in piglet_expenses)
     piglet_heads = sum(e.head_count or 0 for e in piglet_expenses)
     other_expenses = sum(e.amount for e in expenses if e.category != ExpenseCategory.FEED.value)
-    feed_cost = feed_purchases + sum(f.cost for f in feeds)
-    feed_kg = sum(f.quantity_kg for f in feeds)
-    feed_sacks = sum(f.sacks or 0 for f in feeds)
     total_expenses = other_expenses + feed_cost
 
     total_revenue = sum(s.total_revenue for s in sales)
@@ -161,16 +155,11 @@ def _batch_financials(db, batch):
     profit_per_head = (net_profit / heads_sold) if heads_sold > 0 else 0
     roi = (net_profit / total_expenses * 100) if total_expenses > 0 else 0
     margin = (net_profit / total_revenue * 100) if total_revenue > 0 else 0
-    feed_cost_per_kg_sold = (feed_cost / total_weight) if total_weight > 0 else 0
 
     breakdown = {}
     for e in expenses:
         breakdown[e.category] = breakdown.get(e.category, 0) + e.amount
-    feed_log_costs = sum(f.cost for f in feeds)
-    if feed_log_costs:
-        breakdown["feed"] = breakdown.get("feed", 0) + feed_log_costs
 
-    # Growth timeline: average live weight per head sold, by month
     growth_map = {}
     for s in sales:
         if s.heads_sold > 0 and s.weight_kg > 0:
@@ -185,8 +174,6 @@ def _batch_financials(db, batch):
     return {
         "other_expenses": other_expenses,
         "feed_cost": feed_cost,
-        "feed_kg": feed_kg,
-        "feed_sacks": feed_sacks,
         "total_expenses": total_expenses,
         "total_revenue": total_revenue,
         "net_profit": net_profit,
@@ -204,42 +191,139 @@ def _batch_financials(db, batch):
         "profit_per_head": profit_per_head,
         "roi": roi,
         "margin": margin,
-        "feed_cost_per_kg_sold": feed_cost_per_kg_sold,
         "breakdown": breakdown,
         "growth": growth,
         "expenses": expenses,
-        "feeds": feeds,
         "sales": sales,
         "mortalities": mortalities,
     }
 
 
-# ─── AUTH ENDPOINTS ────────────────────────────────────────────────
+# ─── AUTH ───────────────────────────────────────────────────────────
 
-@app.post("/api/auth/login", response_model=TokenResponse)
-def login(data: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == data.username).first()
-    if not user or not verify_password(data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+def _token_response(user: User):
     token = create_access_token(user.id, user.role)
     return TokenResponse(access_token=token, user=UserOut.model_validate(user))
 
 
+@app.post("/api/auth/login", response_model=TokenResponse)
+def login(data: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == data.email.lower().strip()).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this email address. Please sign up first.")
+    if not user.password_hash or not verify_password(data.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect password. Please try again.")
+    return _token_response(user)
+
+
 @app.post("/api/auth/register", response_model=UserOut)
-def register(data: UserCreate, db: Session = Depends(get_db)):
-    """Public self-signup. Every account created here is an administrator."""
-    if db.query(User).filter(User.username == data.username).first():
-        raise HTTPException(status_code=400, detail="Username already exists")
+def register(data: RegisterRequest, db: Session = Depends(get_db)):
+    email = data.email.strip().lower()
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=400, detail="An account with this email already exists. Please sign in instead.")
     user = User(
-        username=data.username,
-        password_hash=hash_password(data.password),
+        email=email,
         full_name=data.full_name,
+        password_hash=hash_password(data.password),
         role="admin",
+        is_onboarded=bool(data.full_name),
     )
     db.add(user)
     db.commit()
     db.refresh(user)
     return user
+
+
+@app.post("/api/auth/google", response_model=TokenResponse)
+def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
+    """Verify a Google OAuth 2.0 id_token / access_token against Google's
+    tokeninfo endpoint, then create-or-login the user by google_sub."""
+    try:
+        key = "id_token" if data.mode == "id_token" else "access_token"
+        url = f"https://oauth2.googleapis.com/tokeninfo?{key}={urllib.parse.quote(data.credential)}"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            info = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Unable to verify Google credential.")
+
+    if str(info.get("email_verified", "false")).lower() != "true":
+        raise HTTPException(status_code=401, detail="Your Google email is not verified.")
+    if GOOGLE_CLIENT_ID and data.mode == "id_token" and info.get("aud") != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=401, detail="Google credential was issued for a different application.")
+
+    sub = info.get("sub")
+    email = (info.get("email") or "").strip().lower()
+    if not sub or not email:
+        raise HTTPException(status_code=401, detail="Google credential is missing required profile fields.")
+
+    user = db.query(User).filter(User.google_sub == sub).first() or db.query(User).filter(User.email == email).first()
+    if not user:
+        user = User(
+            email=email,
+            full_name=(info.get("name") or ""),
+            role="admin",
+            google_sub=sub,
+            password_hash=None,
+            is_onboarded=False,
+        )
+        db.add(user)
+    else:
+        user.google_sub = sub
+        if not user.full_name:
+            user.full_name = (info.get("name") or "")
+    db.commit()
+    db.refresh(user)
+    return _token_response(user)
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    email = data.email.strip().lower()
+    user = db.query(User).filter(User.email == email).first()
+    # Always return the same message (prevents account enumeration).
+    if not user:
+        return {"message": "If an account exists for that email, a password reset link has been sent."}
+
+    user.reset_token = secrets.token_urlsafe(32)
+    user.reset_token_expires = datetime.utcnow() + timedelta(minutes=30)
+    db.commit()
+
+    link = f"{FRONTEND_URL}/reset-password?token={user.reset_token}"
+    body = (
+        f"Hello {user.full_name or 'there'},\n\n"
+        "You requested a password reset for your HogPros account.\n\n"
+        f"Click the link below to choose a new password (valid for 30 minutes):\n{link}\n\n"
+        "If you did not request this, you can safely ignore this email.\n\n"
+        "— HogPros Farm Management"
+    )
+    try:
+        send_email(user.email, "HogPros — Password Reset", body)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not send the reset email. Please check that SMTP is configured.")
+
+    return {"message": "If an account exists for that email, a password reset link has been sent."}
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.reset_token == data.token).first()
+    if not user or not user.reset_token_expires or user.reset_token_expires < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired.")
+    user.password_hash = hash_password(data.new_password)
+    user.reset_token = None
+    user.reset_token_expires = None
+    db.commit()
+    return {"message": "Your password has been updated. Please sign in."}
+
+
+@app.post("/api/auth/onboard", response_model=UserOut)
+def onboard(data: OnboardRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    current_user.full_name = data.full_name.strip()
+    current_user.farm_name = data.farm_name.strip()
+    current_user.is_onboarded = True
+    db.commit()
+    db.refresh(current_user)
+    return current_user
 
 
 @app.get("/api/auth/me", response_model=UserOut)
@@ -252,14 +336,10 @@ def list_users(db: Session = Depends(get_db), admin: User = Depends(require_admi
     return db.query(User).order_by(User.created_at.desc()).all()
 
 
-# ─── BATCH ENDPOINTS ───────────────────────────────────────────────
+# ─── BATCH ENDPOINTS (PRODUCTION) ───────────────────────────────────
 
 @app.get("/api/batches", response_model=List[BatchResponse])
-def list_batches(
-    status: Optional[str] = Query(None),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+def list_batches(status: Optional[str] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     query = db.query(Batch).options(selectinload(Batch.cages))
     if status:
         query = query.filter(Batch.status == status)
@@ -267,11 +347,7 @@ def list_batches(
 
 
 @app.get("/api/batches/{batch_id}", response_model=BatchResponse)
-def get_batch(
-    batch_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+def get_batch(batch_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     return _get_batch_or_404(batch_id, db)
 
 
@@ -286,6 +362,8 @@ def create_batch(batch_data: BatchCreate, db: Session = Depends(get_db), admin: 
         total_heads = sum(c.head_count for c in batch_data.cages)
         if total_heads <= 0:
             raise HTTPException(status_code=400, detail="Cage head counts must be greater than zero")
+    if total_heads <= 0:
+        raise HTTPException(status_code=400, detail="initial_head_count must be greater than zero")
 
     batch = Batch(
         name=batch_data.name,
@@ -298,11 +376,9 @@ def create_batch(batch_data: BatchCreate, db: Session = Depends(get_db), admin: 
     )
     db.add(batch)
     db.flush()
-
     if batch_data.cages:
         for cage in batch_data.cages:
             db.add(Cage(batch_id=batch.id, name=cage.name, head_count=cage.head_count))
-
     db.commit()
     db.refresh(batch)
     return batch
@@ -351,48 +427,44 @@ def delete_batch(batch_id: int, db: Session = Depends(get_db), admin: User = Dep
 
 @app.get("/api/batches/{batch_id}/statement", response_model=Statement)
 def get_statement(batch_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    """Printable Profit & Loss statement for a batch."""
     batch = _get_batch_or_404(batch_id, db)
     fin = _batch_financials(db, batch)
     sales_ordered = sorted(fin["sales"], key=lambda s: s.sale_date)
     period_end = batch.closed_at.date() if (batch.status == BatchStatus.CLOSED.value and batch.closed_at) else date.today()
     return Statement(
-        batch=BatchResponse.model_validate(batch),
+        batch=batch,
         period_end=period_end,
-        total_revenue=round(fin["total_revenue"], 2),
-        total_expenses=round(fin["total_expenses"], 2),
-        net_income=round(fin["net_profit"], 2),
+        total_revenue=fin["total_revenue"],
+        total_expenses=fin["total_expenses"],
+        net_income=fin["net_profit"],
         profit_margin_pct=round(fin["margin"], 2),
-        other_expenses=round(fin["other_expenses"], 2),
-        expense_breakdown={k: round(v, 2) for k, v in fin["breakdown"].items()},
-        total_weight_kg=round(fin["total_weight"], 2),
+        other_expenses=fin["other_expenses"],
+        expense_breakdown=fin["breakdown"],
+        total_weight_kg=fin["total_weight"],
         heads_sold=fin["heads_sold"],
         heads_remaining=fin["heads_remaining"],
         heads_lost=fin["heads_lost"],
-        feed_kg=round(fin["feed_kg"], 2),
-        feed_cost=round(fin["feed_cost"], 2),
+        feed_cost=fin["feed_cost"],
         avg_selling_price_kg=round(fin["avg_selling_price_kg"], 2),
-        piglet_cost=round(fin["piglet_cost"], 2),
+        piglet_cost=fin["piglet_cost"],
         piglet_heads=fin["piglet_heads"],
         buy_price_per_head=round(fin["buy_price_per_head"], 2),
         sell_price_per_head=round(fin["sell_price_per_head"], 2),
         cost_per_head=round(fin["cost_per_head"], 2),
         profit_per_head=round(fin["profit_per_head"], 2),
-        sales=[SaleResponse.model_validate(s) for s in sales_ordered],
+        sales=sales_ordered,
     )
 
 
-# ─── CAGE ENDPOINTS ────────────────────────────────────────────────
+# ─── CAGE ENDPOINTS ─────────────────────────────────────────────────
 
 @app.post("/api/cages", response_model=CageResponse)
-def create_cage(cage_data: CageCreate, batch_id: int = Query(...), db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+def create_cage(batch_id: int, data: CageCreate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     batch = _get_batch_or_404(batch_id, db)
     _ensure_batch_open(batch)
-    existing = db.query(Cage).filter(Cage.batch_id == batch_id, Cage.name == cage_data.name).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Cage name already exists in this batch")
-    cage = Cage(batch_id=batch_id, name=cage_data.name, head_count=cage_data.head_count)
-    batch.cages.append(cage)
+    cage = Cage(batch_id=batch_id, name=data.name, head_count=data.head_count)
+    db.add(cage)
+    db.flush()
     _sync_head_counts(batch)
     db.commit()
     db.refresh(cage)
@@ -400,23 +472,17 @@ def create_cage(cage_data: CageCreate, batch_id: int = Query(...), db: Session =
 
 
 @app.put("/api/cages/{cage_id}", response_model=CageResponse)
-def update_cage(cage_id: int, cage_data: CageUpdate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+def update_cage(cage_id: int, data: CageUpdate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     cage = db.query(Cage).filter(Cage.id == cage_id).first()
     if not cage:
         raise HTTPException(status_code=404, detail="Cage not found")
     batch = _get_batch_or_404(cage.batch_id, db)
     _ensure_batch_open(batch)
-    if cage_data.name is not None:
-        existing = db.query(Cage).filter(Cage.batch_id == batch.id, Cage.name == cage_data.name, Cage.id != cage_id).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Cage name already exists in this batch")
-        cage.name = cage_data.name
-    if cage_data.head_count is not None:
-        sold = _sold_heads(db, batch.id)
-        remaining_needed = cage_data.head_count + sum(c.head_count for c in batch.cages if c.id != cage_id)
-        if remaining_needed < sold:
-            raise HTTPException(status_code=400, detail="Cage head counts cannot go below total heads sold for this batch")
-        cage.head_count = cage_data.head_count
+    if data.name is not None:
+        cage.name = data.name
+    if data.head_count is not None:
+        cage.head_count = data.head_count
+    db.flush()
     _sync_head_counts(batch)
     db.commit()
     db.refresh(cage)
@@ -437,12 +503,53 @@ def delete_cage(cage_id: int, db: Session = Depends(get_db), admin: User = Depen
     return {"message": "Cage deleted"}
 
 
-# ─── EXPENSE ENDPOINTS ─────────────────────────────────────────────
+# ─── EXPENSE LEDGER ─────────────────────────────────────────────────
+
+def _apply_expense_fields(expense: Expense, data: ExpenseCreate, db: Session):
+    amount = data.amount or ((data.quantity or 1.0) * (data.unit_price or 0.0))
+    expense.category = data.category.value if isinstance(data.category, ExpenseCategory) else data.category
+    expense.description = data.description
+    expense.quantity = data.quantity if data.quantity is not None else 1.0
+    expense.unit_price = data.unit_price or 0.0
+    expense.amount = round(amount, 2)
+    expense.date = data.date
+    expense.batch_id = data.batch_id
+    expense.cage_id = data.cage_id
+    expense.head_count = data.head_count
+    expense.inventory_item_id = data.inventory_item_id
+    if data.inventory_item_id:
+        expense.source = "inventory"
+
+
+@app.post("/api/expenses", response_model=ExpenseResponse)
+def create_expense(data: ExpenseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if data.batch_id:
+        _get_batch_or_404(data.batch_id, db)
+    if data.inventory_item_id:
+        item = _item_or_404(data.inventory_item_id, db)
+        expense = Expense(recorded_by_id=current_user.id, source="inventory")
+        _apply_expense_fields(expense, data, db)
+        if expense.category == "misc" and item.category in ("medicines", "medicine", "vitamin", "feed"):
+            expense.category = item.category
+        db.add(expense)
+        db.commit()
+        db.refresh(expense)
+        return expense
+
+    expense = Expense(recorded_by_id=current_user.id)
+    _apply_expense_fields(expense, data, db)
+    db.add(expense)
+    db.commit()
+    db.refresh(expense)
+    return expense
+
 
 @app.get("/api/expenses", response_model=List[ExpenseResponse])
 def list_expenses(
     batch_id: Optional[int] = Query(None),
     category: Optional[str] = Query(None),
+    from_date: Optional[date] = Query(None),
+    to_date: Optional[date] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -451,103 +558,25 @@ def list_expenses(
         query = query.filter(Expense.batch_id == batch_id)
     if category:
         query = query.filter(Expense.category == category)
-    return query.order_by(Expense.date.desc()).all()
-
-
-@app.post("/api/expenses", response_model=ExpenseResponse)
-def create_expense(expense_data: ExpenseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    batch = _get_batch_or_404(expense_data.batch_id, db)
-    _ensure_batch_open(batch)
-    data = expense_data.model_dump()
-
-    quantity = data.get("quantity")
-    unit_price = data.get("unit_price")
-    if quantity is not None and unit_price is not None:
-        if quantity <= 0:
-            raise HTTPException(status_code=400, detail="Quantity must be greater than zero")
-        amount = round(quantity * unit_price, 2)
-    elif data.get("amount"):
-        amount = data["amount"]
-    else:
-        raise HTTPException(status_code=400, detail="Provide quantity and unit price (or a total amount)")
-
-    category = data["category"].value if hasattr(data["category"], "value") else data["category"]
-    cage = None
-    head_count = None
-    if category == ExpenseCategory.PIGLETS.value:
-        if not expense_data.cage_id:
-            raise HTTPException(status_code=400, detail="Cage is required for piglet purchases")
-        cage = next((c for c in batch.cages if c.id == expense_data.cage_id), None)
-        if cage is None:
-            raise HTTPException(status_code=400, detail="Cage does not belong to this batch")
-        duplicate = db.query(Expense).filter(
-            Expense.batch_id == batch.id,
-            Expense.category == ExpenseCategory.PIGLETS.value,
-            Expense.cage_id == cage.id,
-        ).first()
-        if duplicate:
-            raise HTTPException(status_code=400, detail="A piglet cost is already recorded for this cage. Piglet cost is recorded once per cage.")
-        head_count = int(round(quantity or 0)) or 1
-
-    expense = Expense(
-        batch_id=data["batch_id"],
-        category=category,
-        description=data["description"],
-        quantity=quantity,
-        unit_price=unit_price,
-        amount=amount,
-        date=data["date"],
-        cage_id=cage.id if cage else None,
-        head_count=head_count,
-        recorded_by_id=current_user.id,
-    )
-    db.add(expense)
-    db.commit()
-    db.refresh(expense)
-    return expense
+    if from_date:
+        query = query.filter(Expense.date >= from_date)
+    if to_date:
+        query = query.filter(Expense.date <= to_date)
+    return query.order_by(Expense.date.desc(), Expense.id.desc()).all()
 
 
 @app.put("/api/expenses/{expense_id}", response_model=ExpenseResponse)
-def update_expense(expense_id: int, expense_data: ExpenseUpdate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+def update_expense(expense_id: int, data: ExpenseUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     expense = db.query(Expense).filter(Expense.id == expense_id).first()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-    batch = _get_batch_or_404(expense.batch_id, db)
-    _ensure_batch_open(batch)
-
-    update_data = expense_data.model_dump(exclude_unset=True)
-
-    if "quantity" in update_data or "unit_price" in update_data:
-        qty = update_data.get("quantity", expense.quantity)
-        up = update_data.get("unit_price", expense.unit_price)
-        if qty is not None and up is not None:
-            update_data["amount"] = round(qty * up, 2)
-
-    category = update_data.get("category", expense.category)
-    category = category.value if hasattr(category, "value") else category
-    cage_id = update_data.get("cage_id", expense.cage_id)
-
-    if category == ExpenseCategory.PIGLETS.value:
-        if not cage_id:
-            raise HTTPException(status_code=400, detail="Cage is required for piglet purchases")
-        if not any(c.id == cage_id for c in batch.cages):
-            raise HTTPException(status_code=400, detail="Cage does not belong to this batch")
-        duplicate = db.query(Expense).filter(
-            Expense.batch_id == batch.id,
-            Expense.category == ExpenseCategory.PIGLETS.value,
-            Expense.cage_id == cage_id,
-            Expense.id != expense.id,
-        ).first()
-        if duplicate:
-            raise HTTPException(status_code=400, detail="A piglet cost is already recorded for this cage. Piglet cost is recorded once per cage.")
-        qty = update_data.get("quantity", expense.quantity)
-        if qty is None or qty <= 0:
-            raise HTTPException(status_code=400, detail="Number of piglets (quantity) is required for piglet purchases")
-        update_data["head_count"] = int(round(qty))
-
-    for key, value in update_data.items():
-        setattr(expense, key, value)
-
+    payload = data.model_dump(exclude_unset=True)
+    for field, value in payload.items():
+        if field == "category" and value is not None:
+            value = value.value if isinstance(value, ExpenseCategory) else value
+        setattr(expense, field, value) if value is not None else None
+    if expense.amount is None:
+        expense.amount = round((expense.quantity or 1.0) * (expense.unit_price or 0.0), 2)
     db.commit()
     db.refresh(expense)
     return expense
@@ -558,138 +587,100 @@ def delete_expense(expense_id: int, db: Session = Depends(get_db), admin: User =
     expense = db.query(Expense).filter(Expense.id == expense_id).first()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
-    batch = _get_batch_or_404(expense.batch_id, db)
-    _ensure_batch_open(batch)
     db.delete(expense)
     db.commit()
     return {"message": "Expense deleted"}
 
 
-# ─── SALE ENDPOINTS (ADMIN / FINANCIAL) ────────────────────────────
-
-@app.get("/api/sales", response_model=List[SaleResponse])
-def list_sales(batch_id: Optional[int] = Query(None), db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    query = db.query(Sale).options(selectinload(Sale.items))
-    if batch_id:
-        query = query.filter(Sale.batch_id == batch_id)
-    return query.order_by(Sale.sale_date.desc()).all()
-
+# ─── SALES ──────────────────────────────────────────────────────────
 
 @app.post("/api/sales", response_model=SaleResponse)
-def create_sale(sale_data: SaleCreate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    batch = _get_batch_or_404(sale_data.batch_id, db)
+def create_sale(data: SaleCreate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    batch = _get_batch_or_404(data.batch_id, db)
     _ensure_batch_open(batch)
-    if sale_data.heads_sold > batch.current_head_count:
-        raise HTTPException(status_code=400, detail=f"Cannot sell {sale_data.heads_sold} heads. Only {batch.current_head_count} remaining.")
 
-    items = None
-    if sale_data.items:
-        items = []
-        total_heads = 0
-        total_weight = 0.0
-        total_revenue = 0.0
-        for it in sale_data.items:
-            amount = round((it.live_weight_kg or 0) * (it.price_per_kilo or 0), 2)
-            items.append(dict(
-                cage_id=it.cage_id,
-                tag_id=it.tag_id or "",
-                head_count=it.head_count,
-                mode="per_kilo",
-                live_weight_kg=it.live_weight_kg or 0,
-                price_per_kilo=it.price_per_kilo or 0,
-                price_per_head=0.0,
-                amount=amount,
-            ))
-            total_heads += it.head_count
-            total_weight += it.live_weight_kg or 0
-            total_revenue += amount
-        heads_sold = total_heads
-        weight_kg = round(total_weight, 2)
-        total_revenue = round(total_revenue, 2)
+    default_items_price = (
+        data.items and sum((it.amount or 0.0) for it in data.items) > 0
+    )
+    if data.items and not default_items_price:
+        for it in data.items:
+            if it.mode == "per_head":
+                it.amount = it.head_count * it.price_per_head
+            else:
+                it.amount = (it.live_weight_kg or 0.0) * it.price_per_kilo
+        total_revenue = round(sum(it.amount for it in data.items), 2)
+        heads_sold = sum(it.head_count for it in data.items)
+        weight_kg = round(sum(it.live_weight_kg for it in data.items), 2)
     else:
-        heads_sold = sale_data.heads_sold
-        weight_kg = sale_data.weight_kg or 0
-        total_revenue = sale_data.total_revenue or 0
+        total_revenue = data.total_revenue or 0.0
+        heads_sold = data.heads_sold
+        weight_kg = data.weight_kg or 0.0
+        if data.items:
+            for it in data.items:
+                it.amount = it.amount or 0.0
+            total_revenue = round(sum(it.amount for it in data.items), 2) if total_revenue == 0.0 else total_revenue
+
+    _deduct_heads(batch, heads_sold, cage_id=data.items[0].cage_id if data.items else None)
 
     sale = Sale(
-        batch_id=sale_data.batch_id,
+        batch_id=batch.id,
         heads_sold=heads_sold,
         weight_kg=weight_kg,
-        price_per_kilo=sale_data.price_per_kilo or 0,
-        total_revenue=total_revenue,
-        buyer_name=sale_data.buyer_name or "",
-        buyer_contact=sale_data.buyer_contact or "",
-        sale_date=sale_data.sale_date,
-        notes=sale_data.notes or "",
+        price_per_kilo=data.price_per_kilo or 0.0,
+        total_revenue=total_revenue or round(weight_kg * (data.price_per_kilo or 0.0), 2),
+        buyer_name=data.buyer_name or "",
+        buyer_contact=data.buyer_contact or "",
+        sale_date=data.sale_date,
+        notes=data.notes or "",
     )
     db.add(sale)
     db.flush()
-
-    if items:
-        for it in items:
-            db.add(SaleItem(sale_id=sale.id, **it))
-            _deduct_heads(batch, it["head_count"], cage_id=it["cage_id"])
-    else:
-        _deduct_heads(batch, sale_data.heads_sold)
-
+    if data.items:
+        for it in data.items:
+            db.add(SaleItem(
+                sale_id=sale.id,
+                cage_id=it.cage_id,
+                tag_id=it.tag_id or "",
+                head_count=it.head_count,
+                mode=it.mode,
+                live_weight_kg=it.live_weight_kg or 0.0,
+                price_per_kilo=it.price_per_kilo or 0.0,
+                price_per_head=it.price_per_head or 0.0,
+                amount=it.amount,
+            ))
     db.commit()
     db.refresh(sale)
     return sale
 
 
+@app.get("/api/sales", response_model=List[SaleResponse])
+def list_sales(batch_id: Optional[int] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    query = db.query(Sale).options(selectinload(Sale.items))
+    if batch_id:
+        query = query.filter(Sale.batch_id == batch_id)
+    return query.order_by(Sale.sale_date.desc(), Sale.id.desc()).all()
+
+
 @app.put("/api/sales/{sale_id}", response_model=SaleResponse)
-def update_sale(sale_id: int, sale_data: SaleUpdate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    sale = db.query(Sale).filter(Sale.id == sale_id).first()
+def update_sale(sale_id: int, data: SaleUpdate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    sale = db.query(Sale).options(selectinload(Sale.items)).filter(Sale.id == sale_id).first()
     if not sale:
         raise HTTPException(status_code=404, detail="Sale not found")
     batch = _get_batch_or_404(sale.batch_id, db)
     _ensure_batch_open(batch)
-    update_data = sale_data.model_dump(exclude_unset=True)
-    if "items" in update_data and update_data["items"] is not None:
-        # Return the previously-sold heads to inventory before applying the new line items.
-        old_items = db.query(SaleItem).filter(SaleItem.sale_id == sale.id).all()
-        if old_items:
-            for it in old_items:
-                _restore_heads(batch, it.head_count, cage_id=it.cage_id)
-        else:
-            _restore_heads(batch, sale.heads_sold)
 
-        built = []
-        total_heads = 0
-        total_weight = 0.0
-        total_revenue = 0.0
-        for it in update_data["items"]:
-            amount = round((it.get("live_weight_kg") or 0) * (it.get("price_per_kilo") or 0), 2)
-            built.append(dict(
-                cage_id=it.get("cage_id"),
-                tag_id=it.get("tag_id") or "",
-                head_count=it["head_count"],
-                mode="per_kilo",
-                live_weight_kg=it.get("live_weight_kg") or 0,
-                price_per_kilo=it.get("price_per_kilo") or 0,
-                price_per_head=0.0,
-                amount=amount,
-            ))
-            total_heads += it["head_count"]
-            total_weight += it.get("live_weight_kg") or 0
-            total_revenue += amount
-
-        if total_heads > batch.current_head_count:
-            raise HTTPException(status_code=400, detail=f"Cannot sell {total_heads} heads. Only {batch.current_head_count} remaining.")
-
-        sale.items = []
-        db.flush()
-        for it in built:
-            db.add(SaleItem(sale_id=sale.id, **it))
-            _deduct_heads(batch, it["head_count"], cage_id=it["cage_id"])
-        sale.heads_sold = total_heads
-        sale.weight_kg = round(total_weight, 2)
-        sale.total_revenue = round(total_revenue, 2)
-        for k in ("heads_sold", "weight_kg", "total_revenue", "items"):
-            update_data.pop(k, None)
-    for key, value in update_data.items():
-        setattr(sale, key, value)
+    old_heads = sale.heads_sold
+    payload = data.model_dump(exclude_unset=True)
+    for field, value in payload.items():
+        if field != "items" and value is not None:
+            setattr(sale, field, value)
+    diff = sale.heads_sold - old_heads
+    if diff > 0:
+        _deduct_heads(batch, diff)
+    elif diff < 0:
+        _restore_heads(batch, -diff)
     db.commit()
+    db.refresh(batch)
     db.refresh(sale)
     return sale
 
@@ -701,113 +692,59 @@ def delete_sale(sale_id: int, db: Session = Depends(get_db), admin: User = Depen
         raise HTTPException(status_code=404, detail="Sale not found")
     batch = _get_batch_or_404(sale.batch_id, db)
     _ensure_batch_open(batch)
-    if sale.items:
-        for it in sale.items:
-            _restore_heads(batch, it.head_count, cage_id=it.cage_id)
-    else:
-        _restore_heads(batch, sale.heads_sold)
+    _restore_heads(batch, sale.heads_sold)
     db.delete(sale)
     db.commit()
     return {"message": "Sale deleted"}
 
 
-# ─── FEED LOG ENDPOINTS ────────────────────────────────────────────
-
-@app.get("/api/feed-logs", response_model=List[FeedLogResponse])
-def list_feed_logs(
-    batch_id: Optional[int] = Query(None),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    query = db.query(FeedLog)
-    if batch_id:
-        query = query.filter(FeedLog.batch_id == batch_id)
-    return query.order_by(FeedLog.date.desc()).all()
-
-
-@app.post("/api/feed-logs", response_model=FeedLogResponse)
-def create_feed_log(log_data: FeedLogCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    batch = _get_batch_or_404(log_data.batch_id, db)
-    _ensure_batch_open(batch)
-    log = FeedLog(**log_data.model_dump(), recorded_by_id=current_user.id)
-    db.add(log)
-    db.commit()
-    db.refresh(log)
-    return log
-
-
-@app.put("/api/feed-logs/{log_id}", response_model=FeedLogResponse)
-def update_feed_log(log_id: int, log_data: FeedLogUpdate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    log = db.query(FeedLog).filter(FeedLog.id == log_id).first()
-    if not log:
-        raise HTTPException(status_code=404, detail="Feed log not found")
-    batch = _get_batch_or_404(log.batch_id, db)
-    _ensure_batch_open(batch)
-    update_data = log_data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(log, key, value)
-    db.commit()
-    db.refresh(log)
-    return log
-
-
-@app.delete("/api/feed-logs/{log_id}")
-def delete_feed_log(log_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    log = db.query(FeedLog).filter(FeedLog.id == log_id).first()
-    if not log:
-        raise HTTPException(status_code=404, detail="Feed log not found")
-    batch = _get_batch_or_404(log.batch_id, db)
-    _ensure_batch_open(batch)
-    db.delete(log)
-    db.commit()
-    return {"message": "Feed log deleted"}
-
-
-# ─── MORTALITY ENDPOINTS ───────────────────────────────────────────
-
-@app.get("/api/mortalities", response_model=List[MortalityResponse])
-def list_mortalities(
-    batch_id: Optional[int] = Query(None),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    query = db.query(Mortality)
-    if batch_id:
-        query = query.filter(Mortality.batch_id == batch_id)
-    return query.order_by(Mortality.date.desc()).all()
-
+# ─── MORTALITY ──────────────────────────────────────────────────────
 
 @app.post("/api/mortalities", response_model=MortalityResponse)
-def create_mortality(m_data: MortalityCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    batch = _get_batch_or_404(m_data.batch_id, db)
+def create_mortality(data: MortalityCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    batch = _get_batch_or_404(data.batch_id, db)
     _ensure_batch_open(batch)
-    if m_data.head_count > batch.current_head_count:
-        raise HTTPException(status_code=400, detail=f"Cannot record {m_data.head_count} losses. Only {batch.current_head_count} heads remaining.")
-    mortality = Mortality(**m_data.model_dump(), recorded_by_id=current_user.id)
-    _deduct_heads(batch, m_data.head_count, cage_id=m_data.cage_id)
+    _deduct_heads(batch, data.head_count, cage_id=data.cage_id)
+    mortality = Mortality(
+        batch_id=batch.id,
+        cage_id=data.cage_id,
+        date=data.date,
+        head_count=data.head_count,
+        cause=data.cause or "",
+        notes=data.notes or "",
+        recorded_by_id=current_user.id,
+    )
     db.add(mortality)
     db.commit()
     db.refresh(mortality)
     return mortality
 
 
+@app.get("/api/mortalities", response_model=List[MortalityResponse])
+def list_mortalities(batch_id: Optional[int] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    query = db.query(Mortality)
+    if batch_id:
+        query = query.filter(Mortality.batch_id == batch_id)
+    return query.order_by(Mortality.date.desc(), Mortality.id.desc()).all()
+
+
 @app.put("/api/mortalities/{m_id}", response_model=MortalityResponse)
-def update_mortality(m_id: int, m_data: MortalityUpdate, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+def update_mortality(m_id: int, data: MortalityUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     mortality = db.query(Mortality).filter(Mortality.id == m_id).first()
     if not mortality:
-        raise HTTPException(status_code=404, detail="Mortality not found")
+        raise HTTPException(status_code=404, detail="Mortality record not found")
     batch = _get_batch_or_404(mortality.batch_id, db)
     _ensure_batch_open(batch)
-    old_count = mortality.head_count
-    old_cage_id = mortality.cage_id
-    update_data = m_data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(mortality, key, value)
-    new_count = mortality.head_count
-    _restore_heads(batch, old_count, cage_id=old_cage_id)
-    if new_count > batch.current_head_count:
-        raise HTTPException(status_code=400, detail=f"Cannot record {new_count} losses. Only {batch.current_head_count} heads remaining.")
-    _deduct_heads(batch, new_count, cage_id=mortality.cage_id)
+    old = mortality.head_count
+    payload = data.model_dump(exclude_unset=True)
+    for field, value in payload.items():
+        if value is not None:
+            setattr(mortality, field, value)
+    diff = mortality.head_count - old
+    if diff > 0:
+        _deduct_heads(batch, diff)
+    elif diff < 0:
+        _restore_heads(batch, -diff)
     db.commit()
     db.refresh(mortality)
     return mortality
@@ -817,196 +754,494 @@ def update_mortality(m_id: int, m_data: MortalityUpdate, db: Session = Depends(g
 def delete_mortality(m_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     mortality = db.query(Mortality).filter(Mortality.id == m_id).first()
     if not mortality:
-        raise HTTPException(status_code=404, detail="Mortality not found")
+        raise HTTPException(status_code=404, detail="Mortality record not found")
     batch = _get_batch_or_404(mortality.batch_id, db)
     _ensure_batch_open(batch)
-    _restore_heads(batch, mortality.head_count, cage_id=mortality.cage_id)
+    _restore_heads(batch, mortality.head_count)
     db.delete(mortality)
     db.commit()
-    return {"message": "Mortality deleted"}
+    return {"message": "Mortality record deleted"}
 
 
-# ─── DASHBOARD / INSIGHTS (ADMIN) ──────────────────────────────────
+# ─── INVENTORY ──────────────────────────────────────────────────────
+
+def _serialize_inventory_item(item):
+    item.is_low_stock = bool(item.threshold_qty and item.stock_qty <= item.threshold_qty) \
+        if item.threshold_qty else bool(item.stock_qty <= 0)
+    return item
+
+
+def _link_inventory_expense(db, item, qty, unit_cost, batch_id, notes):
+    unit_cost = unit_cost or item.unit_cost or 0.0
+    category = item.category if item.category in ("feed", "medicine") else "inventory"
+    expense = Expense(
+        batch_id=batch_id,
+        category=category,
+        description=f"{item.name} (restock {qty:g} {item.unit})",
+        quantity=qty,
+        unit_price=unit_cost,
+        amount=round(qty * unit_cost, 2),
+        date=date.today(),
+        source="inventory",
+        inventory_item_id=item.id,
+    )
+    db.add(expense)
+    db.flush()
+    return expense
+
+
+@app.post("/api/inventory", response_model=InventoryItemResponse)
+def create_inventory_item(data: InventoryItemCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    item = InventoryItem(
+        name=data.name.strip(),
+        category=data.category.value if isinstance(data.category, InventoryCategory) else data.category,
+        unit=data.unit,
+        stock_qty=data.stock_qty or 0.0,
+        threshold_qty=data.threshold_qty or 0.0,
+        unit_cost=data.unit_cost or 0.0,
+        supplier=data.supplier or "",
+        notes=data.notes or "",
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return _serialize_inventory_item(item)
+
+
+@app.get("/api/inventory", response_model=List[InventoryItemResponse])
+def list_inventory(
+    category: Optional[str] = Query(None),
+    low: Optional[bool] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(InventoryItem)
+    if category:
+        query = query.filter(InventoryItem.category == category)
+    items = query.order_by(InventoryItem.name.asc()).all()
+    if low:
+        items = [i for i in items if (i.threshold_qty and i.stock_qty <= i.threshold_qty) or (not i.threshold_qty and i.stock_qty <= 0)]
+    return [_serialize_inventory_item(i) for i in items]
+
+
+@app.get("/api/inventory/alerts", response_model=List[InventoryItemResponse])
+def low_stock_alerts(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    items = db.query(InventoryItem).all()
+    low = [
+        i for i in items
+        if (i.threshold_qty and i.stock_qty <= i.threshold_qty) or (not i.threshold_qty and i.stock_qty <= 0)
+    ]
+    return [_serialize_inventory_item(i) for i in low]
+
+
+@app.get("/api/inventory/{item_id}", response_model=InventoryItemResponse)
+def get_inventory_item(item_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return _serialize_inventory_item(_item_or_404(item_id, db))
+
+
+@app.put("/api/inventory/{item_id}", response_model=InventoryItemResponse)
+def update_inventory_item(item_id: int, data: InventoryItemUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    item = _item_or_404(item_id, db)
+    payload = data.model_dump(exclude_unset=True)
+    for field, value in payload.items():
+        if value is not None:
+            if field == "category" and isinstance(value, InventoryCategory):
+                value = value.value
+            setattr(item, field, value)
+    db.commit()
+    db.refresh(item)
+    return _serialize_inventory_item(item)
+
+
+@app.delete("/api/inventory/{item_id}")
+def delete_inventory_item(item_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    item = _item_or_404(item_id, db)
+    db.delete(item)
+    db.commit()
+    return {"message": "Inventory item deleted"}
+
+
+@app.post("/api/inventory/{item_id}/restock", response_model=InventoryTransactionResponse)
+def restock_item(item_id: int, data: RestockRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    item = _item_or_404(item_id, db)
+    unit_cost = data.unit_cost or item.unit_cost or 0.0
+
+    expense = None
+    if data.create_expense:
+        expense = _link_inventory_expense(db, item, data.qty, unit_cost, data.batch_id, data.notes)
+
+    item.stock_qty += data.qty
+    item.unit_cost = unit_cost
+    item.last_restocked_at = datetime.utcnow()
+
+    txn = InventoryTransaction(
+        item_id=item.id,
+        type=TransactionType.RESTOCK.value,
+        qty=data.qty,
+        unit_cost=unit_cost,
+        batch_id=data.batch_id,
+        notes=data.notes or "",
+        creates_expense=data.create_expense,
+        expense_id=expense.id if expense else None,
+        recorded_by_id=current_user.id,
+    )
+    db.add(txn)
+    db.commit()
+    db.refresh(txn)
+    return txn
+
+
+@app.post("/api/inventory/{item_id}/issue", response_model=InventoryTransactionResponse)
+def issue_item(item_id: int, data: IssueRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    item = _item_or_404(item_id, db)
+    if data.qty > item.stock_qty:
+        raise HTTPException(status_code=400, detail=f"Cannot issue {data.qty:g} {item.unit} — only {item.stock_qty:g} in stock.")
+
+    item.stock_qty -= data.qty
+    txn = InventoryTransaction(
+        item_id=item.id,
+        type=TransactionType.ISSUE.value,
+        qty=data.qty,
+        unit_cost=item.unit_cost,
+        batch_id=data.batch_id,
+        notes=data.notes or "",
+        creates_expense=False,
+        recorded_by_id=current_user.id,
+    )
+    db.add(txn)
+    db.commit()
+    db.refresh(txn)
+    return txn
+
+
+@app.get("/api/inventory/transactions", response_model=List[InventoryTransactionResponse])
+def list_inventory_transactions(
+    item_id: Optional[int] = Query(None),
+    limit: Optional[int] = Query(50, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(InventoryTransaction)
+    if item_id:
+        query = query.filter(InventoryTransaction.item_id == item_id)
+    return query.order_by(InventoryTransaction.id.desc()).limit(limit).all()
+
+
+# ─── VITAMINS / HEALTH SCHEDULE ─────────────────────────────────────
+
+@app.get("/api/vitamins", response_model=List[VitaminLogResponse])
+def list_vitamins(
+    batch_id: Optional[int] = Query(None),
+    from_date: Optional[date] = Query(None),
+    to_date: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(VitaminLog)
+    if batch_id:
+        query = query.filter(VitaminLog.batch_id == batch_id)
+    if from_date:
+        query = query.filter(VitaminLog.date_administered >= from_date)
+    if to_date:
+        query = query.filter(VitaminLog.date_administered <= to_date)
+    return query.order_by(VitaminLog.date_administered.desc(), VitaminLog.id.desc()).all()
+
+
+@app.post("/api/vitamins", response_model=VitaminLogResponse)
+def create_vitamin(data: VitaminLogCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if data.batch_id:
+        _get_batch_or_404(data.batch_id, db)
+    log = VitaminLog(
+        batch_id=data.batch_id,
+        cage_id=data.cage_id,
+        vitamin_name=data.vitamin_name.strip(),
+        dosage=data.dosage or 0.0,
+        unit=data.unit,
+        date_administered=data.date_administered,
+        next_due_date=data.next_due_date,
+        notes=data.notes or "",
+        recorded_by_id=current_user.id,
+    )
+    db.add(log)
+    db.flush()
+
+    if data.create_reminder and data.next_due_date:
+        db.add(Reminder(
+            title=f"{data.vitamin_name.strip()} — next dose",
+            description=log.notes or "Vitamin injection schedule",
+            reminder_type="vitamin",
+            batch_id=data.batch_id,
+            due_date=data.next_due_date,
+            recurring=True,
+            created_by_id=current_user.id,
+        ))
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+@app.put("/api/vitamins/{vitamin_id}", response_model=VitaminLogResponse)
+def update_vitamin(vitamin_id: int, data: VitaminLogUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    log = db.query(VitaminLog).filter(VitaminLog.id == vitamin_id).first()
+    if not log:
+        raise HTTPException(status_code=404, detail="Vitamin record not found")
+    payload = data.model_dump(exclude_unset=True)
+    for field, value in payload.items():
+        if value is not None:
+            setattr(log, field, value)
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+@app.delete("/api/vitamins/{vitamin_id}")
+def delete_vitamin(vitamin_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    log = db.query(VitaminLog).filter(VitaminLog.id == vitamin_id).first()
+    if not log:
+        raise HTTPException(status_code=404, detail="Vitamin record not found")
+    db.delete(log)
+    db.commit()
+    return {"message": "Vitamin record deleted"}
+
+
+# ─── REMINDERS / SCHEDULE ───────────────────────────────────────────
+
+@app.get("/api/reminders", response_model=List[ReminderResponse])
+def list_reminders(
+    status: Optional[str] = Query(None),
+    due_before: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = db.query(Reminder)
+    if status:
+        query = query.filter(Reminder.status == status)
+    if due_before:
+        query = query.filter(Reminder.due_date <= due_before)
+    return query.order_by(Reminder.due_date.asc(), Reminder.id.desc()).all()
+
+
+@app.post("/api/reminders", response_model=ReminderResponse)
+def create_reminder(data: ReminderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if data.batch_id:
+        _get_batch_or_404(data.batch_id, db)
+    reminder = Reminder(
+        title=data.title.strip(),
+        description=data.description or "",
+        reminder_type=data.reminder_type,
+        batch_id=data.batch_id,
+        due_date=data.due_date,
+        recurring=data.recurring or False,
+        created_by_id=current_user.id,
+    )
+    db.add(reminder)
+    db.commit()
+    db.refresh(reminder)
+    return reminder
+
+
+@app.put("/api/reminders/{reminder_id}", response_model=ReminderResponse)
+def update_reminder(reminder_id: int, data: ReminderUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    reminder = db.query(Reminder).filter(Reminder.id == reminder_id).first()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    payload = data.model_dump(exclude_unset=True)
+    for field, value in payload.items():
+        if value is not None:
+            setattr(reminder, field, value)
+    db.commit()
+    db.refresh(reminder)
+    return reminder
+
+
+@app.post("/api/reminders/{reminder_id}/done", response_model=ReminderResponse)
+def complete_reminder(reminder_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    reminder = db.query(Reminder).filter(Reminder.id == reminder_id).first()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    reminder.status = "done"
+    db.commit()
+    db.refresh(reminder)
+    return reminder
+
+
+@app.delete("/api/reminders/{reminder_id}")
+def delete_reminder(reminder_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    reminder = db.query(Reminder).filter(Reminder.id == reminder_id).first()
+    if not reminder:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    db.delete(reminder)
+    db.commit()
+    return {"message": "Reminder deleted"}
+
+
+# ─── CONTACT / SUPPORT ──────────────────────────────────────────────
+
+@app.post("/api/contact", response_model=ContactResponse)
+def send_contact(
+    data: ContactCreate,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user),
+):
+    recipient = contact_recipient()  # never returned to the client
+    user_label = ""
+    if current_user:
+        user_label = f"\n\n— From HogPros account: {current_user.email} ({current_user.full_name or 'unknown'})"
+    body = f"Subject: {data.subject}\n\n{data.message}{user_label}"
+
+    status, error = "sent", None
+    try:
+        send_email(recipient, f"[HogPros Support] {data.subject}", body)
+    except Exception as exc:
+        status, error = "failed", str(exc)
+
+    message = ContactMessage(
+        subject=data.subject,
+        message=data.message,
+        user_id=current_user.id if current_user else None,
+        status=status,
+        error=error,
+    )
+    db.add(message)
+    db.commit()
+    db.refresh(message)
+
+    if status == "failed":
+        raise HTTPException(status_code=502, detail="Your message could not be sent right now. Please try again later.")
+    return message
+
+
+# ─── DASHBOARD ──────────────────────────────────────────────────────
 
 @app.get("/api/dashboard", response_model=DashboardOverview)
 def get_dashboard(
     batch_ids: Optional[List[int]] = Query(None),
     db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Batch).options(selectinload(Batch.cages))
+    batches = db.query(Batch).options(selectinload(Batch.cages)).all()
     if batch_ids:
-        query = query.filter(Batch.id.in_(batch_ids))
-    batches = query.order_by(Batch.created_at.desc()).all()
+        batches = [b for b in batches if b.id in batch_ids]
 
+    active = [b for b in batches if b.status == BatchStatus.ACTIVE.value]
+    closed = [b for b in batches if b.status == BatchStatus.CLOSED.value]
+
+    total_expenses, total_revenue = 0.0, 0.0
     summaries = []
-    total_expenses = 0
-    total_revenue = 0
-    total_current_heads = 0
-    total_feeds_kg = 0
-    projected_revenue = 0
-
     for batch in batches:
         fin = _batch_financials(db, batch)
+        if batch.status == BatchStatus.ACTIVE.value:
+            total_expenses += fin["total_expenses"]
+            total_revenue += fin["total_revenue"]
         summaries.append(BatchSummary(
-            batch=BatchResponse.model_validate(batch),
-            total_expenses=round(fin["total_expenses"], 2),
-            feed_cost=round(fin["feed_cost"], 2),
-            feed_quantity_kg=round(fin["feed_kg"], 2),
-            other_expenses=round(fin["other_expenses"], 2),
-            total_revenue=round(fin["total_revenue"], 2),
-            net_profit=round(fin["net_profit"], 2),
+            batch=batch,
+            total_expenses=fin["total_expenses"],
+            feed_cost=fin["feed_cost"],
+            other_expenses=fin["other_expenses"],
+            total_revenue=fin["total_revenue"],
+            net_profit=fin["net_profit"],
             roi_percentage=round(fin["roi"], 2),
             profit_margin_pct=round(fin["margin"], 2),
             cost_per_head=round(fin["cost_per_head"], 2),
             profit_per_head=round(fin["profit_per_head"], 2),
-            feed_cost_per_kg_sold=round(fin["feed_cost_per_kg_sold"], 2),
             avg_selling_price_kg=round(fin["avg_selling_price_kg"], 2),
             avg_live_weight_kg=round(fin["avg_live_weight_kg"], 2),
-            total_weight_sold=round(fin["total_weight"], 2),
-            piglet_cost=round(fin["piglet_cost"], 2),
+            total_weight_sold=fin["total_weight"],
+            piglet_cost=fin["piglet_cost"],
             piglet_heads=fin["piglet_heads"],
             buy_price_per_head=round(fin["buy_price_per_head"], 2),
             sell_price_per_head=round(fin["sell_price_per_head"], 2),
             heads_sold=fin["heads_sold"],
             heads_remaining=fin["heads_remaining"],
             heads_lost=fin["heads_lost"],
-            expense_breakdown={k: round(v, 2) for k, v in fin["breakdown"].items()},
+            expense_breakdown=fin["breakdown"],
             growth=fin["growth"],
         ))
-        if batch.status == BatchStatus.ACTIVE.value:
-            total_expenses += fin["total_expenses"]
-            total_revenue += fin["total_revenue"]
-            total_current_heads += batch.current_head_count
-            total_feeds_kg += fin["feed_kg"]
-            est_weight = fin["avg_live_weight_kg"] or 0
-            est_price = fin["avg_selling_price_kg"] or 0
-            projected_revenue += batch.current_head_count * est_weight * est_price
 
-    active_batch_count = sum(1 for b in batches if b.status == BatchStatus.ACTIVE.value)
-    if active_batch_count == 0:
-        total_current_heads = 0
-        total_feeds_kg = 0
-        projected_revenue = 0
-        total_expenses = 0
-        total_revenue = 0
+    total_current_heads = sum(b.current_head_count for b in active)
+    projected_revenue = 0.0
+    for b in active:
+        fin = _batch_financials(db, b)
+        est_weight = fin["avg_live_weight_kg"]
+        est_price = fin["avg_selling_price_kg"]
+        if est_weight > 0 and est_price > 0:
+            projected_revenue += b.current_head_count * est_weight * est_price
+
+    low_stock = [
+        {
+            "item": _serialize_inventory_item(i),
+            "status": "critical" if i.stock_qty <= 0 else "low",
+        }
+        for i in db.query(InventoryItem).all()
+        if (i.threshold_qty and i.stock_qty <= i.threshold_qty) or (not i.threshold_qty and i.stock_qty <= 0)
+    ]
+
+    pending_reminders = db.query(Reminder).filter(Reminder.status == "pending").order_by(Reminder.due_date.asc()).all()
 
     return DashboardOverview(
-        active_batches=active_batch_count,
-        closed_batches=sum(1 for b in batches if b.status == BatchStatus.CLOSED.value),
+        active_batches=len(active),
+        closed_batches=len(closed),
         total_current_heads=total_current_heads,
-        total_feeds_consumed_kg=round(total_feeds_kg, 2),
-        projected_revenue=round(projected_revenue, 2),
-        total_expenses=round(total_expenses, 2),
-        total_revenue=round(total_revenue, 2),
-        total_profit=round(total_revenue - total_expenses, 2),
+        projected_revenue=projected_revenue,
+        total_expenses=total_expenses,
+        total_revenue=total_revenue,
+        total_profit=total_revenue - total_expenses,
+        low_stock_alerts=low_stock,
+        pending_reminders=[ReminderItem.model_validate(r) for r in pending_reminders],
         batches=summaries,
     )
 
 
+# ─── REPORTS ────────────────────────────────────────────────────────
+
 @app.get("/api/reports/expense-breakdown")
-def get_expense_breakdown(batch_id: Optional[int] = Query(None), db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    rows = {}
+def expense_breakdown_report(batch_id: Optional[int] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    query = db.query(Expense)
     if batch_id:
-        fin = _batch_financials(db, _get_batch_or_404(batch_id, db))
-        return {k: round(v, 2) for k, v in fin["breakdown"].items()}
-    for batch in db.query(Batch).all():
-        fin = _batch_financials(db, batch)
-        for k, v in fin["breakdown"].items():
-            rows[k] = rows.get(k, 0) + v
-    return {k: round(v, 2) for k, v in rows.items()}
+        query = query.filter(Expense.batch_id == batch_id)
+    expenses = query.all()
+    breakdown = {}
+    total = 0.0
+    for e in expenses:
+        breakdown[e.category] = round(breakdown.get(e.category, 0.0) + e.amount, 2)
+        total += e.amount
+    return {"breakdown": breakdown, "total": round(total, 2)}
 
 
 @app.get("/api/reports/monthly")
-def get_monthly_report(batch_id: Optional[int] = Query(None), db: Session = Depends(get_db), admin: User = Depends(require_admin)):
-    expense_q = db.query(Expense)
-    feed_q = db.query(FeedLog)
-    sale_q = db.query(Sale)
+def monthly_report(batch_id: Optional[int] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    sales_q = db.query(Sale)
+    exp_q = db.query(Expense)
     if batch_id:
-        expense_q = expense_q.filter(Expense.batch_id == batch_id)
-        feed_q = feed_q.filter(FeedLog.batch_id == batch_id)
-        sale_q = sale_q.filter(Sale.batch_id == batch_id)
-
-    monthly_expenses = {}
-    for e in expense_q.all():
-        k = e.date.strftime("%Y-%m")
-        monthly_expenses[k] = monthly_expenses.get(k, 0) + e.amount
-    for f in feed_q.all():
-        k = f.date.strftime("%Y-%m")
-        monthly_expenses[k] = monthly_expenses.get(k, 0) + f.cost
-
-    monthly_revenue = {}
-    for s in sale_q.all():
-        k = s.sale_date.strftime("%Y-%m")
-        monthly_revenue[k] = monthly_revenue.get(k, 0) + s.total_revenue
-
-    all_months = sorted(set(list(monthly_expenses.keys()) + list(monthly_revenue.keys())))
-    result = []
-    for month in all_months:
-        exp = round(monthly_expenses.get(month, 0), 2)
-        rev = round(monthly_revenue.get(month, 0), 2)
-        result.append({"month": month, "expenses": exp, "revenue": rev, "profit": round(rev - exp, 2)})
-    return result
+        sales_q = sales_q.filter(Sale.batch_id == batch_id)
+        exp_q = exp_q.filter(Expense.batch_id == batch_id)
+    sales = sales_q.all()
+    expenses = exp_q.all()
+    months = {}
+    for s in sales:
+        key = s.sale_date.strftime("%Y-%m")
+        m = months.setdefault(key, {"month": key, "revenue": 0.0, "expenses": 0.0, "heads_sold": 0})
+        m["revenue"] += s.total_revenue
+        m["heads_sold"] += s.heads_sold
+    for e in expenses:
+        key = e.date.strftime("%Y-%m")
+        m = months.setdefault(key, {"month": key, "revenue": 0.0, "expenses": 0.0, "heads_sold": 0})
+        m["expenses"] += e.amount
+    return {"months": [months[k] for k in sorted(months)]}
 
 
 @app.get("/api/reports/cage-summary")
-def get_cage_summary(
-    batch_ids: Optional[List[int]] = Query(None),
-    db: Session = Depends(get_db),
-    admin: User = Depends(require_admin),
-):
-    query = db.query(Batch).options(selectinload(Batch.cages))
+def cage_summary_report(batch_ids: Optional[List[int]] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    batches = db.query(Batch).options(selectinload(Batch.cages)).all()
     if batch_ids:
-        query = query.filter(Batch.id.in_(batch_ids))
-    batches = query.order_by(Batch.created_at.desc()).all()
+        batches = [b for b in batches if b.id in batch_ids]
+    result = []
+    for b in batches:
+        for c in b.cages:
+            result.append({"batch_id": b.id, "batch_name": b.name, "cage_id": c.id, "cage_name": c.name, "head_count": c.head_count})
+    return result
 
-    results = []
-    for batch in batches:
-        piglet_heads_per_cage = {}
-        for e in db.query(Expense).filter(
-            Expense.batch_id == batch.id,
-            Expense.category == ExpenseCategory.PIGLETS.value,
-        ).all():
-            if e.cage_id:
-                piglet_heads_per_cage[e.cage_id] = piglet_heads_per_cage.get(e.cage_id, 0) + (e.head_count or 0)
 
-        sold_per_cage = {}
-        revenue_per_cage = {}
-        for it in db.query(SaleItem).join(Sale).filter(Sale.batch_id == batch.id).all():
-            if it.cage_id:
-                sold_per_cage[it.cage_id] = sold_per_cage.get(it.cage_id, 0) + it.head_count
-                revenue_per_cage[it.cage_id] = revenue_per_cage.get(it.cage_id, 0) + (it.amount or 0)
-
-        dead_per_cage = {}
-        for m in db.query(Mortality).filter(Mortality.batch_id == batch.id).all():
-            if m.cage_id:
-                dead_per_cage[m.cage_id] = dead_per_cage.get(m.cage_id, 0) + m.head_count
-
-        for cage in batch.cages:
-            results.append({
-                "batch_id": batch.id,
-                "batch_name": batch.name,
-                "cage_id": cage.id,
-                "cage_name": cage.name,
-                "current_heads": cage.head_count,
-                "purchased_heads": piglet_heads_per_cage.get(cage.id, 0),
-                "sold_heads": sold_per_cage.get(cage.id, 0),
-                "dead_heads": dead_per_cage.get(cage.id, 0),
-                "revenue": round(revenue_per_cage.get(cage.id, 0), 2),
-            })
-
-    total_current = sum(r["current_heads"] for r in results)
-    total_purchased = sum(r["purchased_heads"] for r in results)
-    total_sold = sum(r["sold_heads"] for r in results)
-    total_dead = sum(r["dead_heads"] for r in results)
-    total_revenue = round(sum(r["revenue"] for r in results), 2)
-    return {
-        "cages": results,
-        "totals": {
-            "current_heads": total_current,
-            "purchased_heads": total_purchased,
-            "sold_heads": total_sold,
-            "dead_heads": total_dead,
-            "revenue": total_revenue,
-        },
-    }
+@app.get("/")
+def root():
+    return {"service": "HogPros API", "version": "3.0.0", "database": "postgresql" if "postgres" in DATABASE_URL else "sqlite"}
