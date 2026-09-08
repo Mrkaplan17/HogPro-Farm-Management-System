@@ -17,7 +17,7 @@ export default function Inventory() {
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState(EMPTY)
   const [action, setAction] = useState(null) // { type: 'restock'|'issue', item }
-  const [txn, setTxn] = useState({ qty: '', unit_cost: '', batch_id: '', create_expense: false, notes: '' })
+  const [txn, setTxn] = useState({ qty: '', unit_cost: '', batch_id: '', notes: '' })
   const [batches, setBatches] = useState([])
 
   async function loadAll() {
@@ -69,7 +69,6 @@ export default function Inventory() {
         qty,
         batch_id: txn.batch_id ? parseInt(txn.batch_id) : null,
         notes: txn.notes || '',
-        create_expense: txn.create_expense,
       }
       if (action.type === 'restock') {
         payload.unit_cost = parseFloat(txn.unit_cost) || 0
@@ -78,7 +77,7 @@ export default function Inventory() {
         await api.issueItem(action.item.id, payload)
       }
       setAction(null)
-      setTxn({ qty: '', unit_cost: '', batch_id: '', create_expense: false, notes: '' })
+      setTxn({ qty: '', unit_cost: '', batch_id: '', notes: '' })
       loadAll()
     } catch (err) { setBanner(err.message) }
   }
@@ -200,10 +199,10 @@ export default function Inventory() {
                 </div>
               </div>
               <div className="p-4 border-t flex gap-2">
-                <button onClick={() => { setAction({ type: 'restock', item }); setTxn({ qty: '', unit_cost: '', batch_id: '', create_expense: false, notes: '' }) }} className="flex-1 flex items-center justify-center gap-1.5 text-sm text-white bg-green-600 hover:bg-green-700 rounded-lg py-2 font-semibold">
+                <button onClick={() => { setAction({ type: 'restock', item }); setTxn({ qty: '', unit_cost: '', batch_id: '', notes: '' }) }} className="flex-1 flex items-center justify-center gap-1.5 text-sm text-white bg-green-600 hover:bg-green-700 rounded-lg py-2 font-semibold">
                   <PackagePlus className="w-4 h-4" /> Restock
                 </button>
-                <button onClick={() => { setAction({ type: 'issue', item }); setTxn({ qty: '', unit_cost: '', batch_id: '', create_expense: false, notes: '' }) }} className="flex-1 flex items-center justify-center gap-1.5 text-sm text-white bg-amber-500 hover:bg-amber-600 rounded-lg py-2 font-semibold">
+                <button onClick={() => { setAction({ type: 'issue', item }); setTxn({ qty: '', unit_cost: '', batch_id: '', notes: '' }) }} className="flex-1 flex items-center justify-center gap-1.5 text-sm text-white bg-amber-500 hover:bg-amber-600 rounded-lg py-2 font-semibold">
                   <PackageMinus className="w-4 h-4" /> Issue
                 </button>
               </div>
@@ -243,11 +242,16 @@ export default function Inventory() {
               <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
               <input value={txn.notes} onChange={(e) => setTxn({ ...txn, notes: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
             </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm text-slate-700 pb-2">
-                <input type="checkbox" checked={txn.create_expense} onChange={(e) => setTxn({ ...txn, create_expense: e.target.checked })} className="rounded" />
-                Record as an expense (links to the ledger)
-              </label>
+            {action.type === 'restock' && (
+              <div className="bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg px-4 py-2.5 text-sm flex items-center gap-2">
+                <PackagePlus className="w-4 h-4 shrink-0" />
+                This restock automatically records an expense in the ledger.
+              </div>
+            )}
+            <div>
+              {action.type === 'issue' && (
+                <p className="text-xs text-slate-400">Issuing stock is a usage entry only — expenses are booked when you restock.</p>
+              )}
             </div>
           </div>
           <div className="flex justify-end gap-2">
@@ -296,7 +300,7 @@ export default function Inventory() {
                     <td className="py-3 px-5 text-right font-semibold">{t.qty.toLocaleString()}</td>
                     <td className="py-3 px-5">{batch?.name || '—'}</td>
                     <td className="py-3 px-5 text-slate-600">{t.notes || '—'}</td>
-                    <td className="py-3 px-5">{t.creates_expense ? `Yes (₱${(t.qty * (t.unit_cost || 0)).toLocaleString()})` : '—'}</td>
+                    <td className="py-3 px-5">{t.creates_expense ? `Yes (₱${(t.total_cost || t.qty * (t.unit_cost || 0)).toLocaleString()})` : '—'}</td>
                   </tr>
                 )
               })}

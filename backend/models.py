@@ -208,6 +208,10 @@ class InventoryItem(Base):
 
 
 class InventoryTransaction(Base):
+    """A stock movement line. Restock lines are inventory batches: each carries
+    its own unit_cost and total_cost (qty x unit_cost), linked to the Expense
+    record that was auto-created for that purchase."""
+
     __tablename__ = "inventory_transactions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -215,6 +219,7 @@ class InventoryTransaction(Base):
     type = Column(String(10), nullable=False)                   # restock | issue
     qty = Column(Float, nullable=False)
     unit_cost = Column(Float, default=0.0)
+    total_cost = Column(Float, default=0.0)                     # qty x unit_cost
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
     notes = Column(Text, default="")
     creates_expense = Column(Boolean, default=False)

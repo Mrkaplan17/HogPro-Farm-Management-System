@@ -141,6 +141,11 @@ class BatchCreate(BaseModel):
     market_price_per_kg: Optional[float] = Field(140.0, gt=0)
     notes: Optional[str] = ""
     cages: Optional[List[CageCreate]] = None
+    # Piglet purchase cost — when set, create_batch auto-books a "piglets"
+    # expense linked to this production batch (head_count = initial_head_count).
+    piglet_cost_amount: Optional[float] = Field(None, ge=0)
+    piglet_cost_description: Optional[str] = ""
+    piglet_cost_date: Optional[date] = None
 
 
 class BatchUpdate(BaseModel):
@@ -359,14 +364,16 @@ class RestockRequest(BaseModel):
     unit_cost: Optional[float] = Field(None, ge=0)
     batch_id: Optional[int] = None
     notes: Optional[str] = ""
-    create_expense: Optional[bool] = False
+    # create_expense is intentionally NOT accepted: restocks ALWAYS write the
+    # corresponding expense entry server-side so the ledger stays in sync.
 
 
 class IssueRequest(BaseModel):
     qty: float = Field(..., gt=0)
     batch_id: Optional[int] = None
     notes: Optional[str] = ""
-    create_expense: Optional[bool] = False
+    # Issues are stock movements only — expense records are written on restock,
+    # never on issue, to avoid double-counting inventory in the ledger.
 
 
 class InventoryTransactionResponse(BaseModel):
@@ -375,6 +382,7 @@ class InventoryTransactionResponse(BaseModel):
     type: str
     qty: float
     unit_cost: float
+    total_cost: float
     batch_id: Optional[int] = None
     notes: str
     creates_expense: bool

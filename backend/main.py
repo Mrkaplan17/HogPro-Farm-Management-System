@@ -43,15 +43,15 @@ Base.metadata.create_all(bind=engine)
 
 # Lightweight schema migration for existing deployments: adds columns added
 # after a database was already created (create_all only makes new tables).
-_existing_cols = {c["name"] for c in inspect(engine).get_columns("users")}
-_migrations = [
+_existing_user_cols = {c["name"] for c in inspect(engine).get_columns("users")}
+_user_migrations = [
     ("google_sub", "VARCHAR(100)", True),
     ("facebook_sub", "VARCHAR(100)", True),
     ("farm_location", "VARCHAR(120)", False),
 ]
 with engine.begin() as conn:
-    for _col, _col_type, _unique in _migrations:
-        if _col not in _existing_cols:
+    for _col, _col_type, _unique in _user_migrations:
+        if _col not in _existing_user_cols:
             conn.execute(text(f"ALTER TABLE users ADD COLUMN {_col} {_col_type}"))
             if _col_type != "VARCHAR(100)":
                 conn.execute(text(f"UPDATE users SET {_col} = '' WHERE {_col} IS NULL"))
@@ -60,6 +60,33 @@ with engine.begin() as conn:
                     conn.execute(text(f"CREATE UNIQUE INDEX uq_users_{_col} ON users ({_col})"))
                 except Exception:
                     pass
+
+# Add inventory_transactions.total_cost (qty x unit_cost) for inventory batches.
+_existing_txn_cols = {c["name"] for c in inspect(engine).get_columns("inventory_transactions")}
+with engine.begin() as conn:
+    if "total_cost" not in _existing_txn_cols:
+        conn.execute(text("ALTER TABLE inventory_transactions ADD COLUMN total_cost FLOAT DEFAULT 0.0"))
+        conn.execute(text("UPDATE inventory_transactions SET total_cost = qty * COALESCE(unit_cost, 0.0) WHERE total_cost IS NULL"))
+
+
+def _validate_config():
+    """Startup sanity checks. Logs warnings; hard-fails only on a missing DB."""
+    import logging
+    log = logging.getLogger("uvicorn.error")
+
+    if not os.environ.get("DATABASE_URL"):
+        log.error("DATABASE_URL is not set — using the local dev default. Production will fail to connect.")
+    if os.environ.get("PIGGERY_SECRET", "piggery-dev-secret-change-me-in-production") == "piggery-dev-secret-change-me-in-production":
+        log.warning("PIGGERY_SECRET is still the dev default — set a random secret in production.")
+    if not os.environ.get("CORS_ORIGINS"):
+        log.warning("CORS_ORIGINS is not set — CORS falls back to localhost dev origins. Set it to your Netlify URL in production.")
+    if not os.environ.get("GOOGLE_CLIENT_ID"):
+        log.warning("GOOGLE_CLIENT_ID not set — Google login button is hidden.")
+    if not os.environ.get("FACEBOOK_APP_ID") or not os.environ.get("FACEBOOK_APP_SECRET"):
+        log.warning("FACEBOOK_APP_ID / FACEBOOK_APP_SECRET not set — Facebook login button is hidden.")
+    if os.environ.get("SMTP_HOST") and not os.environ.get("SMTP_PASSWORD"):
+        log.warning("SMTP_HOST is set but SMTP_PASSWORD is missing — outgoing email (contact/reset) will fail.")
+    return True
 
 app = FastAPI(title="HogPros API — Farm Management & Batch Profitability", version="3.0.0")
 
@@ -79,6 +106,8 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 FACEBOOK_APP_ID = os.environ.get("FACEBOOK_APP_ID", "")
 FACEBOOK_APP_SECRET = os.environ.get("FACEBOOK_APP_SECRET", "")
+
+_validate_config()
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────
@@ -500,6 +529,24 @@ def create_batch(batch_data: BatchCreate, db: Session = Depends(get_db), admin: 
     if batch_data.cages:
         for cage in batch_data.cages:
             db.add(Cage(batch_id=batch.id, name=cage.name, head_count=cage.head_count))
+
+    # Piglet purchase cost is booked straight into the expense ledger so the
+    # production cycle's P&L reflects the cost of the animals from day one.
+    if batch_data.piglet_cost_amount and batch_data.piglet_cost_amount > 0:
+        db.add(Expense(
+            batch_id=batch.id,
+            category=ExpenseCategory.PIGLETS.value,
+            description=(batch_data.piglet_cost_description or "").strip()
+            or f"Purchase of {total_heads} piglet{'s' if total_heads != 1 else ''}",
+            quantity=float(total_heads),
+            unit_price=round(batch_data.piglet_cost_amount / total_heads, 2),
+            amount=round(batch_data.piglet_cost_amount, 2),
+            date=batch_data.piglet_cost_date or batch_data.start_date,
+            head_count=total_heads,
+            source="batch",
+            recorded_by_id=admin.id,
+        ))
+
     db.commit()
     db.refresh(batch)
     return batch
@@ -709,6 +756,8 @@ def delete_expense(expense_id: int, db: Session = Depends(get_db), admin: User =
     expense = db.query(Expense).filter(Expense.id == expense_id).first()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
+    if expense.source in ("inventory", "batch"):
+        raise HTTPException(status_code=403, detail="Auto-generated expenses can't be deleted — remove the restock or batch instead.")
     db.delete(expense)
     db.commit()
     return {"message": "Expense deleted"}
@@ -796,6 +845,38 @@ def update_sale(sale_id: int, data: SaleUpdate, db: Session = Depends(get_db), a
     for field, value in payload.items():
         if field != "items" and value is not None:
             setattr(sale, field, value)
+
+    items = payload.get("items")
+    if items is not None:
+        heads_sold, weight_kg, revenue = 0, 0.0, 0.0
+        rebuilt = []
+        for it in items:
+            if it.mode == "per_head":
+                amt = it.amount if it.amount is not None else it.head_count * it.price_per_head
+                heads_sold += it.head_count
+            else:
+                amt = it.amount if it.amount is not None else (it.live_weight_kg or 0.0) * it.price_per_kilo
+                heads_sold += it.head_count
+                weight_kg += it.live_weight_kg or 0.0
+            rebuilt.append(SaleItem(
+                sale_id=sale.id,
+                cage_id=it.cage_id,
+                tag_id=it.tag_id or "",
+                head_count=it.head_count,
+                mode=it.mode,
+                live_weight_kg=it.live_weight_kg or 0.0,
+                price_per_kilo=it.price_per_kilo or 0.0,
+                price_per_head=it.price_per_head or 0.0,
+                amount=round(amt, 2),
+            ))
+            revenue += amt
+        for old_item in sale.items:
+            db.delete(old_item)
+        sale.items = rebuilt
+        sale.heads_sold = heads_sold
+        sale.weight_kg = round(weight_kg, 2)
+        sale.total_revenue = round(revenue, 2)
+
     diff = sale.heads_sold - old_heads
     if diff > 0:
         _deduct_heads(batch, diff)
@@ -904,15 +985,38 @@ def _inventory_ledger_category(item):
     return mapping.get(item.category, "inventory")
 
 
+def _find_batch_expense(db, item, batch_id):
+    """Find today's auto-generated expense for the same item + production batch.
+    Lets ONE ledger entry cover one or multiple inventory batches (restock
+    lines) added to the same batch on the same day."""
+    return db.query(Expense).filter(
+        Expense.batch_id == batch_id,
+        Expense.inventory_item_id == item.id,
+        Expense.date == date.today(),
+        Expense.source == "inventory",
+    ).first()
+
+
 def _link_inventory_expense(db, item, qty, unit_cost, batch_id, notes, action="restock"):
+    """Create (or extend) the ledger expense for an inventory batch. Restocks
+    ALWAYS write an expense; the amount/quantity accumulate into one entry when
+    the same item is restocked for the same batch on the same day."""
     unit_cost = unit_cost or item.unit_cost or 0.0
+    amount = round(qty * unit_cost, 2)
+    expense = _find_batch_expense(db, item, batch_id)
+    if expense:
+        expense.amount = round(expense.amount + amount, 2)
+        expense.quantity = round((expense.quantity or 0.0) + qty, 2)
+        expense.unit_price = round(expense.amount / expense.quantity, 2) if expense.quantity else expense.unit_price
+        db.flush()
+        return expense
     expense = Expense(
         batch_id=batch_id,
         category=_inventory_ledger_category(item),
         description=f"{item.name} ({action} {qty:g} {item.unit})",
         quantity=qty,
         unit_price=unit_cost,
-        amount=round(qty * unit_cost, 2),
+        amount=amount,
         date=date.today(),
         source="inventory",
         inventory_item_id=item.id,
@@ -1001,6 +1105,15 @@ def update_inventory_item(item_id: int, data: InventoryItemUpdate, db: Session =
 @app.delete("/api/inventory/{item_id}")
 def delete_inventory_item(item_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     item = _item_or_404(item_id, db)
+    # Auto-generated ledger entries reference the inventory items FK — unlink any
+    # transactions from them and remove the expenses so the delete doesn't hit a
+    # foreign-key error (500).
+    expense_ids = [e.id for e in db.query(Expense).filter(Expense.inventory_item_id == item.id).all()]
+    if expense_ids:
+        db.query(InventoryTransaction).filter(InventoryTransaction.expense_id.in_(expense_ids)).update(
+            {"expense_id": None}, synchronize_session=False
+        )
+        db.query(Expense).filter(Expense.id.in_(expense_ids)).delete(synchronize_session=False)
     db.delete(item)
     db.commit()
     return {"message": "Inventory item deleted"}
@@ -1011,9 +1124,9 @@ def restock_item(item_id: int, data: RestockRequest, db: Session = Depends(get_d
     item = _item_or_404(item_id, db)
     unit_cost = data.unit_cost or item.unit_cost or 0.0
 
-    expense = None
-    if data.create_expense:
-        expense = _link_inventory_expense(db, item, data.qty, unit_cost, data.batch_id, data.notes)
+    # Auto-booked: a restock is a purchase, so the ledger entry is written here,
+    # never from a manual form.
+    expense = _link_inventory_expense(db, item, data.qty, unit_cost, data.batch_id, data.notes)
 
     item.stock_qty += data.qty
     item.unit_cost = unit_cost
@@ -1024,10 +1137,11 @@ def restock_item(item_id: int, data: RestockRequest, db: Session = Depends(get_d
         type=TransactionType.RESTOCK.value,
         qty=data.qty,
         unit_cost=unit_cost,
+        total_cost=round(data.qty * unit_cost, 2),
         batch_id=data.batch_id,
         notes=data.notes or "",
-        creates_expense=data.create_expense,
-        expense_id=expense.id if expense else None,
+        creates_expense=True,
+        expense_id=expense.id,
         recorded_by_id=current_user.id,
     )
     db.add(txn)
@@ -1042,20 +1156,17 @@ def issue_item(item_id: int, data: IssueRequest, db: Session = Depends(get_db), 
     if data.qty > item.stock_qty:
         raise HTTPException(status_code=400, detail=f"Cannot issue {data.qty:g} {item.unit} — only {item.stock_qty:g} in stock.")
 
-    expense = None
-    if data.create_expense:
-        expense = _link_inventory_expense(db, item, data.qty, item.unit_cost, data.batch_id, data.notes, action="issue")
-
     item.stock_qty -= data.qty
     txn = InventoryTransaction(
         item_id=item.id,
         type=TransactionType.ISSUE.value,
         qty=data.qty,
         unit_cost=item.unit_cost,
+        total_cost=round(data.qty * (item.unit_cost or 0.0), 2),
         batch_id=data.batch_id,
         notes=data.notes or "",
-        creates_expense=bool(data.create_expense),
-        expense_id=expense.id if expense else None,
+        creates_expense=False,
+        expense_id=None,
         recorded_by_id=current_user.id,
     )
     db.add(txn)

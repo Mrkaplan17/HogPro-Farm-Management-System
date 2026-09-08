@@ -20,6 +20,7 @@ export default function Operations() {
     name: '',
     initial_head_count: 50,
     start_date: new Date().toISOString().split('T')[0],
+    piglet_cost_amount: '',
     notes: '',
     cages: [{ ...EMPTY_CAGE }],
   })
@@ -43,6 +44,7 @@ export default function Operations() {
       name: '',
       initial_head_count: 50,
       start_date: new Date().toISOString().split('T')[0],
+      piglet_cost_amount: '',
       notes: '',
       cages: [{ ...EMPTY_CAGE }],
     })
@@ -77,6 +79,7 @@ export default function Operations() {
         name: form.name,
         initial_head_count: parseInt(form.initial_head_count),
         start_date: form.start_date,
+        piglet_cost_amount: parseFloat(form.piglet_cost_amount) || undefined,
         notes: form.notes,
         cages: useCages ? filled.map((c) => ({ name: c.name.trim(), head_count: parseInt(c.head_count) })) : null,
       })
@@ -214,14 +217,28 @@ export default function Operations() {
             </button>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-            <textarea
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Piglet purchase cost (₱, optional)</label>
+              <input
+                type="number"
+                min="0"
+                value={form.piglet_cost_amount}
+                onChange={(e) => setForm({ ...form, piglet_cost_amount: e.target.value })}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
+                placeholder="e.g. 45000"
+              />
+              <p className="text-xs text-slate-400 mt-1">Auto-records a piglets expense in the ledger with this batch.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
+              <textarea
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
               rows="2"
             />
+            </div>
           </div>
 
           <div className="flex justify-end gap-2">
