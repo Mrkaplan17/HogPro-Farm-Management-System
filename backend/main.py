@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session, selectinload
 from typing import List, Optional
 
@@ -21,7 +22,7 @@ from security import (
     get_current_user, require_admin,
 )
 from schemas import (
-    RegisterRequest, LoginRequest, GoogleLoginRequest, ForgotPasswordRequest,
+    RegisterRequest, LoginRequest, GoogleLoginRequest, FacebookLoginRequest, ForgotPasswordRequest,
     ResetPasswordRequest, OnboardRequest, UserOut, TokenResponse,
     BatchCreate, BatchUpdate, BatchResponse,
     CageCreate, CageUpdate, CageResponse,
@@ -40,6 +41,18 @@ from emailer import send_email, contact_recipient
 
 Base.metadata.create_all(bind=engine)
 
+# Lightweight schema migration for existing deployments: adds columns added
+# after a database was already created (create_all only makes new tables).
+_existing_cols = {c["name"] for c in inspect(engine).get_columns("users")}
+with engine.begin() as conn:
+    for col in ("google_sub", "facebook_sub"):
+        if col not in _existing_cols:
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} VARCHAR(100)"))
+            try:
+                conn.execute(text(f"CREATE UNIQUE INDEX uq_users_{col} ON users ({col})"))
+            except Exception:
+                pass
+
 app = FastAPI(title="HogPros API — Farm Management & Batch Profitability", version="3.0.0")
 
 _default_origins = ["http://localhost:5173", "http://localhost:3000"]
@@ -56,6 +69,8 @@ app.add_middleware(
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+FACEBOOK_APP_ID = os.environ.get("FACEBOOK_APP_ID", "")
+FACEBOOK_APP_SECRET = os.environ.get("FACEBOOK_APP_SECRET", "")
 
 
 # ─── HELPERS ───────────────────────────────────────────────────────
@@ -271,6 +286,72 @@ def google_login(data: GoogleLoginRequest, db: Session = Depends(get_db)):
         user.google_sub = sub
         if not user.full_name:
             user.full_name = (info.get("name") or "")
+    db.commit()
+    db.refresh(user)
+    return _token_response(user)
+
+
+@app.post("/api/auth/facebook", response_model=TokenResponse)
+def facebook_login(data: FacebookLoginRequest, db: Session = Depends(get_db)):
+    """Verify a Facebook JS SDK access token via the Graph API debug_token
+    endpoint, then create-or-login the user by facebook_sub."""
+    if not FACEBOOK_APP_ID or not FACEBOOK_APP_SECRET:
+        raise HTTPException(status_code=503, detail="Facebook login is not configured on this server.")
+
+    app_access_token = urllib.parse.quote(f"{FACEBOOK_APP_ID}|{FACEBOOK_APP_SECRET}")
+    debug_url = (
+        "https://graph.facebook.com/v18.0/debug_token"
+        f"?input_token={urllib.parse.quote(data.access_token)}"
+        f"&access_token={app_access_token}"
+    )
+    try:
+        with urllib.request.urlopen(debug_url, timeout=10) as resp:
+            info = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unable to verify Facebook credential.")
+
+    db_data = info.get("data") or {}
+    sub = str(db_data.get("user_id", ""))
+    if not db_data.get("is_valid") or not sub:
+        raise HTTPException(status_code=401, detail="Facebook session is invalid or has expired.")
+    if data.user_id and data.user_id != sub:
+        raise HTTPException(status_code=401, detail="Facebook session does not match the account.")
+
+    profile_url = (
+        "https://graph.facebook.com/v18.0/"
+        f"{urllib.parse.quote(sub)}?fields=id,name,email"
+        f"&access_token={urllib.parse.quote(data.access_token)}"
+    )
+    try:
+        with urllib.request.urlopen(profile_url, timeout=10) as resp:
+            profile = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=401, detail="Could not fetch your Facebook profile.")
+
+    name = (profile.get("name") or "").strip()
+    email = (profile.get("email") or "").strip().lower()
+    if not email:
+        # Facebook no longer guarantees email on every account — bind by sub
+        # using a synthetic login email so the account still has a unique key.
+        email = f"fb_{sub}@login.facebook.users"
+
+    user = db.query(User).filter(User.facebook_sub == sub).first()
+    if not user:
+        user = db.query(User).filter(User.email == email).first()
+    if not user:
+        user = User(
+            email=email,
+            full_name=name,
+            role="admin",
+            facebook_sub=sub,
+            password_hash=None,
+            is_onboarded=False,
+        )
+        db.add(user)
+    else:
+        user.facebook_sub = sub
+        if not user.full_name:
+            user.full_name = name
     db.commit()
     db.refresh(user)
     return _token_response(user)

@@ -57,6 +57,7 @@ class User(Base):
     subscription_status = Column(String(20), default=SubscriptionStatus.FREE.value)
     is_onboarded = Column(Boolean, default=False)
     google_sub = Column(String(100), unique=True, nullable=True)
+    facebook_sub = Column(String(100), unique=True, nullable=True)
     reset_token = Column(String(255), nullable=True)
     reset_token_expires = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

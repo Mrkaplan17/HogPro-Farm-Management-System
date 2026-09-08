@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { PiggyBank, ShieldCheck, LogIn, UserPlus, Mail } from 'lucide-react'
+import { PiggyBank, ShieldCheck, LogIn, UserPlus, Mail, Eye, EyeOff, Facebook } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import { api } from '../api'
 import DevCredit from '../components/DevCredit'
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
+const FB_APP_ID = import.meta.env.VITE_FACEBOOK_APP_ID || ''
 
 const EMPTY_FORM = { full_name: '', email: '', password: '' }
 
@@ -18,6 +19,9 @@ export default function Login() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showSigninPassword, setShowSigninPassword] = useState(false)
+  const [showSignupPassword, setShowSignupPassword] = useState(false)
+  const [fbReady, setFbReady] = useState(false)
 
   useEffect(() => {
     if (user) navigate('/', { replace: true })
@@ -34,11 +38,52 @@ export default function Login() {
     return () => document.body.removeChild(s)
   }, [GOOGLE_CLIENT_ID])
 
+  useEffect(() => {
+    if (!FB_APP_ID) return
+    window.fbAsyncInit = () => {
+      window.FB.init({ appId: FB_APP_ID, version: 'v18.0', cookie: false, xfbml: false })
+      setFbReady(true)
+    }
+    const s = document.createElement('script')
+    s.src = 'https://connect.facebook.net/en_US/sdk.js'
+    s.async = true
+    s.defer = true
+    document.body.appendChild(s)
+    return () => document.body.removeChild(s)
+  }, [FB_APP_ID])
+
   async function handleGoogle(credential) {
     setError('')
     setLoading(true)
     try {
       const res = await api.googleLogin(credential, 'id_token')
+      localStorage.setItem('piggery_token', res.access_token)
+      localStorage.setItem('piggery_user', JSON.stringify(res.user))
+      navigate(res.user.is_onboarded ? '/' : '/onboard', { replace: true })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleFacebook() {
+    setError('')
+    setLoading(true)
+    try {
+      if (!window.FB) throw new Error('Facebook is still loading. Try again in a moment.')
+      const authResponse = await new Promise((resolve, reject) => {
+        window.FB.login(
+          (r) => (r.authResponse ? resolve(r.authResponse) : reject(new Error('Facebook login was cancelled.'))),
+          { scope: 'public_profile,email' },
+        )
+      })
+      const profile = await new Promise((resolve, reject) => {
+        window.FB.api('/me?fields=id,name,email', { access_token: authResponse.accessToken }, (p) =>
+          p && !p.error ? resolve(p) : reject(new Error('Could not load your Facebook profile.')),
+        )
+      })
+      const res = await api.facebookLogin(authResponse.accessToken, profile.id)
       localStorage.setItem('piggery_token', res.access_token)
       localStorage.setItem('piggery_user', JSON.stringify(res.user))
       navigate(res.user.is_onboarded ? '/' : '/onboard', { replace: true })
@@ -157,13 +202,24 @@ export default function Login() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
-                    <input
-                      required type="password"
-                      value={signin.password}
-                      onChange={(e) => setSignin({ ...signin, password: e.target.value })}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
-                      placeholder="••••••••"
-                    />
+                    <div className="relative">
+                      <input
+                        required type={showSigninPassword ? 'text' : 'password'}
+                        value={signin.password}
+                        onChange={(e) => setSignin({ ...signin, password: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
+                        placeholder="••••••••"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSigninPassword((s) => !s)}
+                        tabIndex={-1}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                        aria-label={showSigninPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showSigninPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
                   <div className="flex justify-end">
                     <Link to="/forgot-password" className="text-xs font-medium text-pink-600 hover:text-pink-700">
@@ -179,30 +235,45 @@ export default function Login() {
                   </button>
                 </form>
 
-                {GOOGLE_CLIENT_ID && (
+                {(GOOGLE_CLIENT_ID || FB_APP_ID) && (
                   <>
                     <div className="flex items-center gap-3 my-4">
                       <div className="flex-1 h-px bg-slate-200" />
                       <span className="text-xs text-slate-400">or</span>
                       <div className="flex-1 h-px bg-slate-200" />
                     </div>
-                    <div
-                      id="g_id_onload"
-                      data-client_id={GOOGLE_CLIENT_ID}
-                      data-callback="handleHogProsGoogle"
-                      data-auto_prompt="false"
-                      className="hidden"
-                    />
-                    <div
-                      className="g_id_signin w-full flex justify-center"
-                      data-type="standard"
-                      data-shape="rectangular"
-                      data-theme="outline"
-                      data-text="continue_with"
-                      data-size="large"
-                      data-width="320"
-                      data-logo_alignment="left"
-                    />
+                    {GOOGLE_CLIENT_ID && (
+                      <>
+                        <div
+                          id="g_id_onload"
+                          data-client_id={GOOGLE_CLIENT_ID}
+                          data-callback="handleHogProsGoogle"
+                          data-auto_prompt="false"
+                          className="hidden"
+                        />
+                        <div
+                          className="g_id_signin w-full flex justify-center"
+                          data-type="standard"
+                          data-shape="rectangular"
+                          data-theme="outline"
+                          data-text="continue_with"
+                          data-size="large"
+                          data-width="320"
+                          data-logo_alignment="left"
+                        />
+                      </>
+                    )}
+                    {FB_APP_ID && (
+                      <button
+                        type="button"
+                        onClick={handleFacebook}
+                        disabled={loading || !fbReady}
+                        className="w-full flex items-center justify-center gap-2 border border-slate-300 rounded-lg py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        <Facebook className="w-4 h-4 text-[#1877F2]" />
+                        Continue with Facebook
+                      </button>
+                    )}
                   </>
                 )}
               </>
@@ -233,13 +304,24 @@ export default function Login() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
-                    <input
-                      required type="password" minLength="6"
-                      value={signup.password}
-                      onChange={(e) => setSignup({ ...signup, password: e.target.value })}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
-                      placeholder="At least 6 characters"
-                    />
+                    <div className="relative">
+                      <input
+                        required type={showSignupPassword ? 'text' : 'password'} minLength="6"
+                        value={signup.password}
+                        onChange={(e) => setSignup({ ...signup, password: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
+                        placeholder="At least 6 characters"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSignupPassword((s) => !s)}
+                        tabIndex={-1}
+                        className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
+                        aria-label={showSignupPassword ? 'Hide password' : 'Show password'}
+                      >
+                        {showSignupPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </div>
                   <button
                     type="submit" disabled={loading}

@@ -43,6 +43,7 @@ export const api = {
   login: (email, password) => post('/auth/login', { email, password }),
   register: (data) => post('/auth/register', data),
   googleLogin: (credential, mode = 'id_token') => post('/auth/google', { credential, mode }),
+  facebookLogin: (accessToken, userId) => post('/auth/facebook', { access_token: accessToken, user_id: userId }),
   me: () => request('/auth/me'),
   onboard: (data) => post('/auth/onboard', data),
   forgotPassword: (data) => post('/auth/forgot-password', data),

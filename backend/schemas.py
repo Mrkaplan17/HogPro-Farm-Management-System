@@ -57,6 +57,12 @@ class GoogleLoginRequest(BaseModel):
     mode: str = Field("id_token", pattern="^(id_token|access_token)$")
 
 
+class FacebookLoginRequest(BaseModel):
+    """Facebook JS SDK short-lived user access token (verified server-side)."""
+    access_token: str = Field(..., min_length=1)
+    user_id: str = Field("", max_length=100)
+
+
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
