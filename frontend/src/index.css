@@ -1,0 +1,224 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-slate-50 text-slate-900;
+}
+
+@media print {
+  html,
+  body {
+    height: auto !important;
+  }
+  #root {
+    display: none !important;
+  }
+  .print-overlay {
+    position: static !important;
+    inset: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+  }
+  .print-area {
+    width: 100%;
+    background: white;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-body {
+    padding: 1rem 1.2rem 1.1rem 1.2rem !important;
+  }
+  /* Keep reports on a single page where possible */
+  .print-body .pb-4 {
+    padding-bottom: 0.6rem !important;
+  }
+  .print-body .py-4 {
+    padding-top: 0.7rem !important;
+    padding-bottom: 0.7rem !important;
+  }
+  .print-body .mt-5 {
+    margin-top: 0.6rem !important;
+  }
+  .report-meta-grid {
+    gap: 0.5rem !important;
+    margin-bottom: 0.7rem !important;
+  }
+  .report-meta-grid > div {
+    padding: 0.35rem 0.75rem !important;
+  }
+  .card-head {
+    padding: 0.35rem 0.75rem !important;
+  }
+  .detail-table td {
+    padding: 0.22rem 0.75rem !important;
+  }
+  .summary-report-print .summary-table th,
+  .summary-report-print .summary-table td,
+  .sales-table th,
+  .sales-table td {
+    padding-top: 0.3rem;
+    padding-bottom: 0.3rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    font-size: 0.8125rem;
+  }
+  .report-signature {
+    margin-top: 0.9rem;
+    padding-top: 0.7rem;
+  }
+  /* Owner signature + credit anchored to the bottom footer of the page */
+  .print-report-footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    margin: 0 !important;
+    padding: 0.45rem 1.2rem 0.55rem !important;
+    background: #ffffff;
+    border-top: 1px solid #e2e8f0;
+    z-index: 999;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
+/* ── PDF/print report styling ─────────────────────────── */
+.print-body {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.report-signature {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #e2e8f0;
+  break-inside: avoid;
+}
+
+/* Footer (owner signature + credit) fixed to the bottom of the printed page */
+.print-report-footer {
+  margin-top: 1.25rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid #e2e8f0;
+  break-inside: avoid;
+}
+
+.report-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.report-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.6rem;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.detail-table {
+  border-collapse: collapse;
+}
+.detail-table td {
+  padding: 0.5rem 1rem;
+}
+.detail-table tr:nth-child(even) {
+  background: #f8fafc;
+}
+
+.summary-table,
+.sales-table {
+  border-collapse: collapse;
+  border: 1px solid #cbd5e1;
+  overflow: hidden;
+}
+.summary-table thead th,
+.sales-table thead th {
+  background: #0f172a;
+  font-weight: 600;
+}
+.summary-table tbody tr,
+.sales-table tbody tr {
+  border-bottom: 1px solid #e2e8f0;
+}
+.summary-table tbody tr.row-even,
+.sales-table tbody tr.row-even {
+  background: #f8fafc;
+}
+.summary-table tbody tr.row-odd,
+.sales-table tbody tr.row-odd {
+  background: #ffffff;
+}
+.sales-table {
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0;
+}
+.sales-table.no-round {
+  border-radius: 0;
+}
+.summary-table tfoot.totals-row {
+  background: #f1f5f9;
+  border-top: 2px solid #0f172a;
+}
+
+@media (max-width: 640px) {
+  .report-meta-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media print {
+  .report-meta-grid {
+    break-inside: avoid;
+  }
+  .report-card {
+    break-inside: avoid;
+  }
+}
+
+@page {
+  size: A4;
+  margin: 12mm 14mm 24mm 14mm;
+}
+
+/* Dashboard multi-batch summary report: fit content compactly on one page */
+.summary-report-print .print-report-footer {
+  margin-top: 1.5rem;
+}
+
+@media print {
+  .print-area {
+    page-break-after: avoid;
+  }
+  .print-report-footer {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}
+
+/* Compact table for the multi-batch summary report — single page */
+.summary-report-print .summary-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.summary-report-print .summary-table th,
+.summary-report-print .summary-table td {
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  font-size: 0.8125rem;
+}

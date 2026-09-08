@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: piggery-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    envVars:
+      - key: PIGGERY_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://YOUR-SITE.netlify.app
+      - key: DATABASE_URL
+        value: sqlite:///./piggery.db
