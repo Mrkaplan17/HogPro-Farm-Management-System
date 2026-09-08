@@ -28,6 +28,11 @@ export function AuthProvider({ children }) {
     return res.user
   }
 
+  const updateUser = (user) => {
+    localStorage.setItem('piggery_user', JSON.stringify(user))
+    setUser(user)
+  }
+
   const logout = () => {
     localStorage.removeItem('piggery_token')
     localStorage.removeItem('piggery_user')
@@ -36,7 +41,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, setSession, isAdmin: user?.role === 'admin' }}>
+    <AuthContext.Provider value={{ user, token, login, logout, setSession, updateUser, isAdmin: user?.role === 'admin' }}>
       {children}
     </AuthContext.Provider>
   )

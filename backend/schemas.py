@@ -77,12 +77,26 @@ class OnboardRequest(BaseModel):
     farm_name: str = Field("", max_length=120)
 
 
+class UpdateProfileRequest(BaseModel):
+    """Profile updates. NOTE: email is intentionally NOT accepted here —
+    email is strictly read-only and can never be changed by the user."""
+    full_name: Optional[str] = Field(None, max_length=100)
+    farm_name: Optional[str] = Field(None, max_length=120)
+    farm_location: Optional[str] = Field(None, max_length=120)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1, max_length=100)
+    new_password: str = Field(..., min_length=6, max_length=100)
+
+
 class UserOut(BaseModel):
     id: int
     email: str
     username: Optional[str] = None
     full_name: str
     farm_name: str
+    farm_location: str
     role: str
     is_active: bool
     subscription_status: str

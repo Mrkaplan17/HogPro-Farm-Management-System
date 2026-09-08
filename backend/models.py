@@ -52,6 +52,7 @@ class User(Base):
     password_hash = Column(String(255), nullable=True)          # None for OAuth-only accounts
     full_name = Column(String(100), default="")
     farm_name = Column(String(120), default="")
+    farm_location = Column(String(120), default="")
     role = Column(String(20), default="worker")                 # admin | worker
     is_active = Column(Boolean, default=True)
     subscription_status = Column(String(20), default=SubscriptionStatus.FREE.value)

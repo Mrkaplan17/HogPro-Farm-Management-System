@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, PiggyBank, LogOut } from 'lucide-react'
+import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, Settings as SettingsIcon, PiggyBank, LogOut } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import DevCredit from './DevCredit'
 
@@ -18,6 +18,7 @@ export default function Layout() {
     { to: '/inventory', label: 'Inventory', icon: Boxes, end: false },
     { to: '/vitamins', label: 'Vitamins & Health', icon: Syringe, end: false },
     { to: '/expenses', label: 'Expenses', icon: Receipt, end: false },
+    { to: '/settings', label: 'Account Settings', icon: SettingsIcon, end: false },
   ]
 
   return (

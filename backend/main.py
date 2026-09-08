@@ -23,7 +23,7 @@ from security import (
 )
 from schemas import (
     RegisterRequest, LoginRequest, GoogleLoginRequest, FacebookLoginRequest, ForgotPasswordRequest,
-    ResetPasswordRequest, OnboardRequest, UserOut, TokenResponse,
+    ResetPasswordRequest, OnboardRequest, UpdateProfileRequest, ChangePasswordRequest, UserOut, TokenResponse,
     BatchCreate, BatchUpdate, BatchResponse,
     CageCreate, CageUpdate, CageResponse,
     ExpenseCreate, ExpenseUpdate, ExpenseResponse,
@@ -44,14 +44,22 @@ Base.metadata.create_all(bind=engine)
 # Lightweight schema migration for existing deployments: adds columns added
 # after a database was already created (create_all only makes new tables).
 _existing_cols = {c["name"] for c in inspect(engine).get_columns("users")}
+_migrations = [
+    ("google_sub", "VARCHAR(100)", True),
+    ("facebook_sub", "VARCHAR(100)", True),
+    ("farm_location", "VARCHAR(120)", False),
+]
 with engine.begin() as conn:
-    for col in ("google_sub", "facebook_sub"):
-        if col not in _existing_cols:
-            conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} VARCHAR(100)"))
-            try:
-                conn.execute(text(f"CREATE UNIQUE INDEX uq_users_{col} ON users ({col})"))
-            except Exception:
-                pass
+    for _col, _col_type, _unique in _migrations:
+        if _col not in _existing_cols:
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN {_col} {_col_type}"))
+            if _col_type != "VARCHAR(100)":
+                conn.execute(text(f"UPDATE users SET {_col} = '' WHERE {_col} IS NULL"))
+            if _unique:
+                try:
+                    conn.execute(text(f"CREATE UNIQUE INDEX uq_users_{_col} ON users ({_col})"))
+                except Exception:
+                    pass
 
 app = FastAPI(title="HogPros API — Farm Management & Batch Profitability", version="3.0.0")
 
@@ -410,6 +418,36 @@ def onboard(data: OnboardRequest, db: Session = Depends(get_db), current_user: U
 @app.get("/api/auth/me", response_model=UserOut)
 def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@app.put("/api/auth/me", response_model=UserOut)
+def update_profile(data: UpdateProfileRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Update the authenticated user's profile.
+    Email is strictly read-only: it is never accepted by this endpoint."""
+    payload = data.model_dump(exclude_unset=True)
+    if "email" in payload:
+        raise HTTPException(status_code=400, detail="Email cannot be changed.")
+    for field, value in payload.items():
+        if value is not None:
+            setattr(current_user, field, value)
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+@app.post("/api/auth/change-password")
+def change_password(data: ChangePasswordRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Change the password after verifying the current one."""
+    if not current_user.password_hash:
+        raise HTTPException(
+            status_code=400,
+            detail="Your account uses Google/Facebook login and has no password to change.",
+        )
+    if not verify_password(data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect. Please try again.")
+    current_user.password_hash = hash_password(data.new_password)
+    db.commit()
+    return {"message": "Your password has been updated. Please use it on your next sign in."}
 
 
 @app.get("/api/users", response_model=List[UserOut])

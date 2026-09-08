@@ -12,6 +12,7 @@ import GroupDetail from './pages/GroupDetail'
 import Inventory from './pages/Inventory'
 import Vitamins from './pages/Vitamins'
 import Expenses from './pages/Expenses'
+import Settings from './pages/Settings'
 import ProtectedRoute from './components/ProtectedRoute'
 
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
           <Route path="inventory" element={<Inventory />} />
           <Route path="vitamins" element={<Vitamins />} />
           <Route path="expenses" element={<Expenses />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

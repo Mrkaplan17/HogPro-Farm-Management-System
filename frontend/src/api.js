@@ -45,6 +45,8 @@ export const api = {
   googleLogin: (credential, mode = 'id_token') => post('/auth/google', { credential, mode }),
   facebookLogin: (accessToken, userId) => post('/auth/facebook', { access_token: accessToken, user_id: userId }),
   me: () => request('/auth/me'),
+  updateProfile: (data) => put('/auth/me', data),
+  changePassword: (data) => post('/auth/change-password', data),
   onboard: (data) => post('/auth/onboard', data),
   forgotPassword: (data) => post('/auth/forgot-password', data),
   resetPassword: (data) => post('/auth/reset-password', data),
