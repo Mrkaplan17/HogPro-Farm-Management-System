@@ -11,7 +11,7 @@ services:
       - key: PIGGERY_SECRET
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://YOUR-SITE.netlify.app
+        value: https://YOUR-SITE.netlify.app  # replace with your live Netlify URL (no trailing slash)
       # DATABASE_URL is intentionally NOT set here — paste your Supabase
       # pooler URL as a secret in the Render dashboard (Security > Environment).
       # Never commit database credentials to the repository.
