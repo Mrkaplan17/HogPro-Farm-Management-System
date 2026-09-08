@@ -15,12 +15,16 @@ export function AuthProvider({ children }) {
     }
   }, [token])
 
+  const setSession = (token, user) => {
+    localStorage.setItem('piggery_token', token)
+    localStorage.setItem('piggery_user', JSON.stringify(user))
+    setToken(token)
+    setUser(user)
+  }
+
   const login = async (email, password) => {
     const res = await api.login(email, password)
-    localStorage.setItem('piggery_token', res.access_token)
-    localStorage.setItem('piggery_user', JSON.stringify(res.user))
-    setToken(res.access_token)
-    setUser(res.user)
+    setSession(res.access_token, res.user)
     return res.user
   }
 
@@ -32,7 +36,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isAdmin: user?.role === 'admin' }}>
+    <AuthContext.Provider value={{ user, token, login, logout, setSession, isAdmin: user?.role === 'admin' }}>
       {children}
     </AuthContext.Provider>
   )

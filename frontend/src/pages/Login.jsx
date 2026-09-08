@@ -11,7 +11,7 @@ const FB_APP_ID = import.meta.env.VITE_FACEBOOK_APP_ID || ''
 const EMPTY_FORM = { full_name: '', email: '', password: '' }
 
 export default function Login() {
-  const { user, login } = useAuth()
+  const { user, login, setSession } = useAuth()
   const navigate = useNavigate()
   const [mode, setMode] = useState('signin')
   const [signin, setSignin] = useState({ email: '', password: '' })
@@ -24,7 +24,7 @@ export default function Login() {
   const [fbReady, setFbReady] = useState(false)
 
   useEffect(() => {
-    if (user) navigate('/', { replace: true })
+    if (user) navigate(user.is_onboarded ? '/' : '/onboard', { replace: true })
   }, [user])
 
   useEffect(() => {
@@ -57,9 +57,7 @@ export default function Login() {
     setLoading(true)
     try {
       const res = await api.googleLogin(credential, 'id_token')
-      localStorage.setItem('piggery_token', res.access_token)
-      localStorage.setItem('piggery_user', JSON.stringify(res.user))
-      navigate(res.user.is_onboarded ? '/' : '/onboard', { replace: true })
+      setSession(res.access_token, res.user)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -84,9 +82,7 @@ export default function Login() {
         )
       })
       const res = await api.facebookLogin(authResponse.accessToken, profile.id)
-      localStorage.setItem('piggery_token', res.access_token)
-      localStorage.setItem('piggery_user', JSON.stringify(res.user))
-      navigate(res.user.is_onboarded ? '/' : '/onboard', { replace: true })
+      setSession(res.access_token, res.user)
     } catch (err) {
       setError(err.message)
     } finally {
