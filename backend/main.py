@@ -1325,6 +1325,62 @@ def delete_reminder(reminder_id: int, db: Session = Depends(get_db), admin: User
     return {"message": "Reminder deleted"}
 
 
+# ─── NOTIFICATIONS ──────────────────────────────────────────────────
+
+# Window used by the in-app notification center: flag a dose when its due
+# date is within this many days (or already overdue). Overridable per-request.
+REMINDER_LEAD_DAYS = int(os.environ.get("REMINDER_LEAD_DAYS", "3"))
+
+
+@app.get("/api/notifications")
+def list_notifications(lead_days: Optional[int] = Query(None), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    lead = lead_days if lead_days is not None else REMINDER_LEAD_DAYS
+    today = date.today()
+    cutoff = today + timedelta(days=max(lead, 0))
+
+    doses = (
+        db.query(Reminder)
+        .filter(Reminder.status == "pending", Reminder.reminder_type == "vitamin")
+        .order_by(Reminder.due_date.asc())
+        .all()
+    )
+    overdue_doses = []
+    due_doses = []
+    for r in doses:
+        entry = {
+            "id": r.id,
+            "title": r.title,
+            "batch_name": r.batch.name if r.batch else None,
+            "due_date": r.due_date,
+            "days_left": (r.due_date - today).days,
+        }
+        if entry["days_left"] < 0:
+            overdue_doses.append(entry)
+        elif today <= r.due_date <= cutoff:
+            due_doses.append(entry)
+
+    low_stock = [
+        {
+            "item_id": i.id,
+            "name": i.name,
+            "unit": i.unit,
+            "stock_qty": i.stock_qty,
+            "threshold_qty": i.threshold_qty,
+            "status": "critical" if i.stock_qty <= 0 else "low",
+        }
+        for i in db.query(InventoryItem).order_by(InventoryItem.name.asc()).all()
+        if (i.threshold_qty and i.stock_qty <= i.threshold_qty) or (not i.threshold_qty and i.stock_qty <= 0)
+    ]
+
+    return {
+        "overdue_doses": overdue_doses,
+        "due_doses": due_doses,
+        "low_stock": low_stock,
+        "lead_days": lead,
+        "total": len(overdue_doses) + len(due_doses) + len(low_stock),
+    }
+
+
 # ─── CONTACT / SUPPORT ──────────────────────────────────────────────
 
 @app.post("/api/contact", response_model=ContactResponse)

@@ -3,6 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, Settings as SettingsIcon, PiggyBank, LogOut, HelpCircle } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import DevCredit from './DevCredit'
+import NotificationBell from './NotificationBell'
 
 export default function Layout() {
   const { user, logout } = useAuth()
@@ -74,8 +75,16 @@ export default function Layout() {
         </div>
       </aside>
 
-      <div className="flex-1 ml-64">
-        <Outlet />
+      <div className="flex-1 ml-64 flex flex-col">
+        <header className="sticky top-0 z-30 h-16 bg-white/85 backdrop-blur border-b border-slate-200 flex items-center justify-end gap-3 px-6 print:hidden">
+          <span className="text-sm text-slate-400 hidden sm:block">
+            {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
+          </span>
+          <NotificationBell />
+        </header>
+        <main className="flex-1">
+          <Outlet />
+        </main>
       </div>
 
       {confirmLogout && (

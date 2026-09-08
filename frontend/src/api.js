@@ -109,6 +109,9 @@ export const api = {
   completeReminder: (id) => post(`/reminders/${id}/done`),
   deleteReminder: (id) => del(`/reminders/${id}`),
 
+  // ── Notifications (due doses + low-stock alerts) ──
+  getNotifications: () => request('/notifications'),
+
   // ── Support / contact (recipient stays server-side) ──
   sendContact: (data) => post('/contact', data),
 
