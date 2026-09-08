@@ -2,17 +2,18 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { UserPlus, PiggyBank } from 'lucide-react'
 import { api } from '../api'
+import { useAuth } from '../auth/AuthContext'
 
 export default function Onboard() {
   const navigate = useNavigate()
-  const [form, setForm] = useState({ full_name: '', farm_name: '' })
+  const { user, updateUser } = useAuth()
+  const [form, setForm] = useState({ full_name: '', farm_name: '', farm_location: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (!localStorage.getItem('piggery_token')) navigate('/login', { replace: true })
-    const saved = JSON.parse(localStorage.getItem('piggery_user') || '{}')
-    if (saved?.full_name) setForm((f) => ({ ...f, full_name: saved.full_name }))
+    if (user?.full_name) setForm((f) => ({ ...f, full_name: user.full_name }))
   }, [])
 
   async function submit(e) {
@@ -20,10 +21,12 @@ export default function Onboard() {
     setLoading(true)
     setError('')
     try {
-      await api.onboard(form)
-      const saved = JSON.parse(localStorage.getItem('piggery_user') || '{}')
-      localStorage.setItem('piggery_user', JSON.stringify({ ...saved, on_boarded: true, full_name: form.full_name, ...form }))
-      navigate('/', { replace: true })
+      const res = await api.onboard({
+        ...form,
+        farm_location: form.farm_location || null,
+      })
+      updateUser(res)
+      navigate(res.is_onboarded ? '/' : '/onboard', { replace: true })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -53,6 +56,12 @@ export default function Onboard() {
             <input required value={form.farm_name} onChange={(e) => setForm({ ...form, farm_name: e.target.value })}
               className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
               placeholder="e.g. Alcayaga Pig Farm" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Farm location</label>
+            <input value={form.farm_location} onChange={(e) => setForm({ ...form, farm_location: e.target.value })}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-500"
+              placeholder="e.g. Barangay San Isidro, Batangas" />
           </div>
           <button type="submit" disabled={loading}
             className="w-full flex items-center justify-center gap-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-lg">

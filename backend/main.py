@@ -409,6 +409,8 @@ def reset_password(data: ResetPasswordRequest, db: Session = Depends(get_db)):
 def onboard(data: OnboardRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     current_user.full_name = data.full_name.strip()
     current_user.farm_name = data.farm_name.strip()
+    if data.farm_location is not None:
+        current_user.farm_location = data.farm_location.strip()
     current_user.is_onboarded = True
     db.commit()
     db.refresh(current_user)
@@ -648,8 +650,7 @@ def create_expense(data: ExpenseCreate, db: Session = Depends(get_db), current_u
         item = _item_or_404(data.inventory_item_id, db)
         expense = Expense(recorded_by_id=current_user.id, source="inventory")
         _apply_expense_fields(expense, data, db)
-        if expense.category == "misc" and item.category in ("medicines", "medicine", "vitamin", "feed"):
-            expense.category = item.category
+        expense.category = _inventory_ledger_category(item)
         db.add(expense)
         db.commit()
         db.refresh(expense)
@@ -690,12 +691,14 @@ def update_expense(expense_id: int, data: ExpenseUpdate, db: Session = Depends(g
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
     payload = data.model_dump(exclude_unset=True)
+    recompute_amount = "amount" not in payload and any(f in payload for f in ("quantity", "unit_price"))
     for field, value in payload.items():
         if field == "category" and value is not None:
             value = value.value if isinstance(value, ExpenseCategory) else value
-        setattr(expense, field, value) if value is not None else None
-    if expense.amount is None:
-        expense.amount = round((expense.quantity or 1.0) * (expense.unit_price or 0.0), 2)
+        if value is not None:
+            setattr(expense, field, value)
+    if recompute_amount:
+        expense.amount = round((expense.quantity if expense.quantity is not None else 1.0) * (expense.unit_price or 0.0), 2)
     db.commit()
     db.refresh(expense)
     return expense
@@ -890,13 +893,23 @@ def _serialize_inventory_item(item):
     return item
 
 
-def _link_inventory_expense(db, item, qty, unit_cost, batch_id, notes):
+def _inventory_ledger_category(item):
+    """Map an inventory item's category to the expense ledger category."""
+    mapping = {
+        "feed": "feed",
+        "medicine": "medicine",
+        "vitamin": "medicine",
+        "supplies": "inventory",
+    }
+    return mapping.get(item.category, "inventory")
+
+
+def _link_inventory_expense(db, item, qty, unit_cost, batch_id, notes, action="restock"):
     unit_cost = unit_cost or item.unit_cost or 0.0
-    category = item.category if item.category in ("feed", "medicine") else "inventory"
     expense = Expense(
         batch_id=batch_id,
-        category=category,
-        description=f"{item.name} (restock {qty:g} {item.unit})",
+        category=_inventory_ledger_category(item),
+        description=f"{item.name} ({action} {qty:g} {item.unit})",
         quantity=qty,
         unit_price=unit_cost,
         amount=round(qty * unit_cost, 2),
@@ -1016,6 +1029,10 @@ def issue_item(item_id: int, data: IssueRequest, db: Session = Depends(get_db), 
     if data.qty > item.stock_qty:
         raise HTTPException(status_code=400, detail=f"Cannot issue {data.qty:g} {item.unit} — only {item.stock_qty:g} in stock.")
 
+    expense = None
+    if data.create_expense:
+        expense = _link_inventory_expense(db, item, data.qty, item.unit_cost, data.batch_id, data.notes, action="issue")
+
     item.stock_qty -= data.qty
     txn = InventoryTransaction(
         item_id=item.id,
@@ -1024,7 +1041,8 @@ def issue_item(item_id: int, data: IssueRequest, db: Session = Depends(get_db), 
         unit_cost=item.unit_cost,
         batch_id=data.batch_id,
         notes=data.notes or "",
-        creates_expense=False,
+        creates_expense=bool(data.create_expense),
+        expense_id=expense.id if expense else None,
         recorded_by_id=current_user.id,
     )
     db.add(txn)
@@ -1068,6 +1086,8 @@ def list_vitamins(
 
 @app.post("/api/vitamins", response_model=VitaminLogResponse)
 def create_vitamin(data: VitaminLogCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if data.create_reminder and not data.next_due_date:
+        raise HTTPException(status_code=400, detail="Provide a 'next dose due' date to create a schedule reminder.")
     if data.batch_id:
         _get_batch_or_404(data.batch_id, db)
     log = VitaminLog(

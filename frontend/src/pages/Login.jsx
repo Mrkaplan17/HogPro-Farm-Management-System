@@ -95,8 +95,8 @@ export default function Login() {
     setLoading(true)
     setError('')
     try {
-      await login(signin.email, signin.password)
-      navigate('/', { replace: true })
+      const u = await login(signin.email, signin.password)
+      navigate(u.is_onboarded ? '/' : '/onboard', { replace: true })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -247,16 +247,16 @@ export default function Login() {
                           data-auto_prompt="false"
                           className="hidden"
                         />
-                        <div
-                          className="g_id_signin w-full flex justify-center"
-                          data-type="standard"
-                          data-shape="rectangular"
-                          data-theme="outline"
-                          data-text="continue_with"
-                          data-size="large"
-                          data-width="320"
-                          data-logo_alignment="left"
-                        />
+                        <div className="flex items-center gap-3 border border-slate-300 rounded-lg px-3 py-2">
+                          <div
+                            className="g_id_signin"
+                            data-type="icon"
+                            data-shape="rectangular"
+                            data-theme="outline"
+                            data-size="large"
+                          />
+                          <span className="text-sm font-semibold text-slate-700">Continue with Google</span>
+                        </div>
                       </>
                     )}
                     {FB_APP_ID && (

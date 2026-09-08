@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, EmailStr, field_validator
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List
 from datetime import date, datetime
 from enum import Enum
@@ -75,6 +75,7 @@ class ResetPasswordRequest(BaseModel):
 class OnboardRequest(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=100)
     farm_name: str = Field("", max_length=120)
+    farm_location: Optional[str] = Field(None, max_length=120)
 
 
 class UpdateProfileRequest(BaseModel):
@@ -178,11 +179,6 @@ class ExpenseCreate(BaseModel):
     cage_id: Optional[int] = None
     head_count: Optional[int] = Field(None, ge=1)
     inventory_item_id: Optional[int] = None
-
-    @field_validator("amount", mode="before")
-    @classmethod
-    def _amount_default(cls, v):
-        return v  # amount computed server-side when omitted
 
 
 class ExpenseUpdate(BaseModel):

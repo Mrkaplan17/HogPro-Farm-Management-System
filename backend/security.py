@@ -85,7 +85,11 @@ def get_current_user(
     payload = decode_token(credentials.credentials)
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    user = db.query(User).filter(User.id == int(payload["sub"])).first()
+    try:
+        user_id = int(payload["sub"])
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise HTTPException(status_code=401, detail="User no longer exists")
     return user

@@ -20,8 +20,6 @@ export default function Vitamins() {
   const [showR, setShowR] = useState(false)
   const [rForm, setRForm] = useState(EMPTY_R)
 
-  const done = (s) => s === 'done'
-
   async function loadAll() {
     setLoading(true)
     try {
@@ -161,8 +159,11 @@ export default function Vitamins() {
               </div>
               <div className="flex items-center gap-2">
                 <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={vForm.create_reminder} onChange={(e) => setVForm({ ...vForm, create_reminder: e.target.checked })} className="rounded" />
+                  <input type="checkbox" checked={vForm.create_reminder}
+                    onChange={(e) => setVForm({ ...vForm, create_reminder: e.target.checked })}
+                    disabled={!vForm.next_due_date} className="rounded" />
                   Create a schedule reminder for the next dose
+                  {!vForm.next_due_date && <span className="text-xs text-slate-400">(set a next dose date to enable)</span>}
                 </label>
               </div>
               <div className="flex justify-end gap-2">
@@ -298,7 +299,9 @@ export default function Vitamins() {
                       {r.status !== 'done' && (
                         <button onClick={() => complete(r.id)} title="Mark done" className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><CheckCircle2 className="w-4 h-4" /></button>
                       )}
-                      <button onClick={() => remove(r.id, 'reminder')} className="p-2 text-slate-400 hover:text-red-600 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                      {isAdmin && (
+                        <button onClick={() => remove(r.id, 'reminder')} className="p-2 text-slate-400 hover:text-red-600 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                      )}
                     </div>
                   </div>
                 )
