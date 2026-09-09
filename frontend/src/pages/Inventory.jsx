@@ -26,8 +26,9 @@ export default function Inventory() {
   async function loadAll() {
     setLoading(true)
     try {
+      await api.ensureFeedTypes().catch(() => [])
       const [itemsData, txnData, alerts, batchesData] = await Promise.all([
-        api.getInventory(),
+        api.getInventory().catch(() => []),
         api.getInventoryTransactions({ limit: 50 }).catch(() => []),
         api.getInventoryAlerts().catch(() => []),
         api.getBatches().catch(() => []),

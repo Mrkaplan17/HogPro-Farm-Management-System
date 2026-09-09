@@ -96,6 +96,8 @@ export const api = {
   issueItem: (id, data) => post(`/inventory/${id}/issue`, data),
   getInventoryTransactions: (params) => request(`/inventory/transactions${qs(params)}`),
   cancelInventoryTransaction: (id) => del(`/inventory/transactions/${id}`),
+  ensureFeedTypes: () => request('/inventory/feed-types'),
+  createFeedPurchase: (batchId, data) => post(`/batches/${batchId}/feed-purchase`, data),
 
   // ── Vitamins / health schedule ──
   getVitamins: (params) => request(`/vitamins${qs(params)}`),

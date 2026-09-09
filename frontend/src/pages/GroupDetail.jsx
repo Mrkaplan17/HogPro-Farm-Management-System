@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useParams, Link } from 'react-router-dom'
-import { Plus, Trash2, Lock, Pencil, Check, X, ArrowLeft, Grid3x3, Users, Printer, Skull, TrendingUp } from 'lucide-react'
+import { Plus, Trash2, Lock, Pencil, Check, X, ArrowLeft, Grid3x3, Users, Printer, Skull, TrendingUp, PackagePlus } from 'lucide-react'
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import { useAuth } from '../auth/AuthContext'
@@ -11,6 +11,13 @@ import { PageSkeleton } from '../components/Skeleton'
 import Modal, { ConfirmDialog } from '../components/Modal'
 
 const EXPENSE_CATEGORIES = ['piglets', 'feed', 'medicine', 'veterinary', 'utilities', 'labor', 'maintenance', 'misc']
+
+const FEED_TYPES = [
+  { value: 'pre_starter', label: 'Pre-Starter' },
+  { value: 'starter', label: 'Starter' },
+  { value: 'grower', label: 'Grower' },
+  { value: 'finisher', label: 'Finisher' },
+]
 
 export default function GroupDetail() {
   const { id } = useParams()
@@ -638,16 +645,36 @@ function CagesSection({ group, isLocked, isAdmin, loadAll }) {
 
 function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll }) {
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ category: 'piglets', description: '', quantity: '', unit_price: '', date: new Date().toISOString().split('T')[0], cage_id: '' })
+  const [form, setForm] = useState({ category: 'piglets', description: '', quantity: '', unit_price: '', date: new Date().toISOString().split('T')[0], cage_id: '', feed_type: '' })
   const total = expenses.reduce((s, e) => s + e.amount, 0)
   const isPiglets = form.category === 'piglets'
+  const isFeed = form.category === 'feed'
   const lineTotal = (parseFloat(form.quantity) || 0) * (parseFloat(form.unit_price) || 0)
   const pigletHeads = isPiglets ? parseInt(form.quantity) || 0 : 0
   const usedCageIds = new Set((expenses || []).filter((e) => e.category === 'piglets').map((e) => e.cage_id))
   const availableCages = (cages || []).filter((c) => !usedCageIds.has(c.id))
+  const feedLabel = FEED_TYPES.find((f) => f.value === form.feed_type)?.label || ''
 
   async function submit(e) {
     e.preventDefault()
+    if (isFeed) {
+      if (!form.feed_type) return alert('Select the exact feed type — Pre-Starter, Starter, Grower or Finisher.')
+      if (!(parseFloat(form.quantity) > 0)) return alert('Enter the quantity (kg) of feed purchased.')
+      if (!(lineTotal > 0)) return alert('Enter a price per kg so the total cost can be computed.')
+      try {
+        await api.createFeedPurchase(batchId, {
+          feed_type: form.feed_type,
+          qty: parseFloat(form.quantity),
+          unit_cost: parseFloat(form.unit_price),
+          purchase_date: form.date,
+          notes: form.description.trim(),
+        })
+        setShowForm(false)
+        setForm({ category: 'piglets', description: '', quantity: '', unit_price: '', date: new Date().toISOString().split('T')[0], cage_id: '', feed_type: '' })
+        loadAll()
+      } catch (err) { alert(err.message) }
+      return
+    }
     if (isPiglets) {
       if (!form.cage_id) return alert('Pick a cage for the piglets — each cage is one group.')
       if (!(pigletHeads > 0)) return alert('Enter how many piglets (quantity) were bought.')
@@ -663,7 +690,7 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
     try {
       await api.createExpense({ ...payload, batch_id: batchId })
       setShowForm(false)
-      setForm({ category: 'piglets', description: '', quantity: '', unit_price: '', date: new Date().toISOString().split('T')[0], cage_id: '' })
+      setForm({ category: 'piglets', description: '', quantity: '', unit_price: '', date: new Date().toISOString().split('T')[0], cage_id: '', feed_type: '' })
       loadAll()
     } catch (err) { alert(err.message) }
   }
@@ -687,18 +714,30 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
           </button>
         </div>
       )}
-      <Modal open={showForm && !isLocked} onClose={() => setShowForm(false)} title="Add Expense" subtitle="Record a cost against this group" maxWidth="max-w-2xl" icon={<Plus className="w-5 h-5" />}>
+      <Modal open={showForm && !isLocked} onClose={() => setShowForm(false)} title={isFeed ? 'Add Feed Purchase' : 'Add Expense'} subtitle={isFeed ? 'Stock the feed type into inventory and book the cost to this group' : 'Record a cost against this group'} maxWidth="max-w-2xl" icon={isFeed ? <PackagePlus className="w-5 h-5" /> : <Plus className="w-5 h-5" />}>
         <form onSubmit={submit} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value, description: '', feed_type: '' })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
                 {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
-              <input required value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+              {isFeed ? (
+                <>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Feed type</label>
+                  <select required value={form.feed_type} onChange={(e) => setForm({ ...form, feed_type: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                    <option value="">Select feed type…</option>
+                    {FEED_TYPES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Description</label>
+                  <input required value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                </>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>
@@ -719,12 +758,12 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
             )}
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">{isPiglets ? 'Heads bought (quantity)' : 'Quantity'}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{isPiglets ? 'Heads bought (quantity)' : isFeed ? 'Quantity (kg)' : 'Quantity'}</label>
               <input required type="number" step="0.01" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
                 placeholder={isPiglets ? 'e.g. 10' : 'e.g. 50'} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">{isPiglets ? 'Price per head (₱)' : 'Unit price (₱)'}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{isPiglets ? 'Price per head (₱)' : isFeed ? 'Price per kg (₱)' : 'Unit price (₱)'}</label>
               <input required type="number" step="0.01" min="0" value={form.unit_price} onChange={(e) => setForm({ ...form, unit_price: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
                 placeholder="e.g. 1500" />
             </div>
@@ -732,6 +771,9 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
 
           <p className="text-sm text-slate-600">
             Total cost: <strong className="text-red-600">₱{lineTotal.toLocaleString()}</strong>
+            {isFeed && (
+              <span className="text-slate-400"> — stocks {feedLabel || 'this feed'} into inventory and books it against this group.</span>
+            )}
             {isPiglets && (
               <span className="text-slate-400"> — recorded against {cageName(parseInt(form.cage_id)) || 'the selected cage'}. Inventory is managed in the Cages tab.</span>
             )}
@@ -739,7 +781,7 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
 
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-slate-600 border border-slate-300 rounded-lg">Cancel</button>
-            <button type="submit" className="px-5 py-2 text-sm text-white bg-pink-600 rounded-lg font-semibold">Save Expense</button>
+            <button type="submit" className="px-5 py-2 text-sm text-white bg-pink-600 rounded-lg font-semibold">{isFeed ? 'Save Feed Purchase' : 'Save Expense'}</button>
           </div>
         </form>
       </Modal>

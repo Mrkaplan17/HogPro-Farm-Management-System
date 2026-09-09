@@ -38,6 +38,13 @@ class TransactionType(str, Enum):
     ISSUE = "issue"
 
 
+class FeedType(str, Enum):
+    PRE_STARTER = "pre_starter"
+    STARTER = "starter"
+    GROWER = "grower"
+    FINISHER = "finisher"
+
+
 # ─── AUTH & ONBOARDING ─────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
@@ -141,11 +148,6 @@ class BatchCreate(BaseModel):
     market_price_per_kg: Optional[float] = Field(140.0, gt=0)
     notes: Optional[str] = ""
     cages: Optional[List[CageCreate]] = None
-    # Piglet purchase cost — when set, create_batch auto-books a "piglets"
-    # expense linked to this production batch (head_count = initial_head_count).
-    piglet_cost_amount: Optional[float] = Field(None, ge=0)
-    piglet_cost_description: Optional[str] = ""
-    piglet_cost_date: Optional[date] = None
 
 
 class BatchUpdate(BaseModel):
@@ -374,6 +376,18 @@ class IssueRequest(BaseModel):
     notes: Optional[str] = ""
     # Issues are stock movements only — expense records are written on restock,
     # never on issue, to avoid double-counting inventory in the ledger.
+
+
+class FeedPurchaseRequest(BaseModel):
+    feed_type: FeedType
+    qty: float = Field(..., gt=0)
+    unit_cost: Optional[float] = Field(None, ge=0)
+    purchase_date: Optional[date] = None
+    notes: Optional[str] = ""
+    # A feed purchase is a restock of the named feed-type inventory item
+    # (pre-starter / starter / grower / finisher) tagged to a production batch:
+    # the expense is auto-booked with batch_id + inventory_item_id so batch
+    # P&L reports and inventory stock levels stay in sync.
 
 
 class InventoryTransactionResponse(BaseModel):

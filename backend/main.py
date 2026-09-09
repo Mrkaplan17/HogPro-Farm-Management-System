@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import inspect, text
+from sqlalchemy import func, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from typing import List, Optional
@@ -32,6 +32,7 @@ from schemas import (
     MortalityCreate, MortalityUpdate, MortalityResponse,
     InventoryItemCreate, InventoryItemUpdate, InventoryItemResponse,
     RestockRequest, IssueRequest, InventoryTransactionResponse,
+    FeedType, FeedPurchaseRequest,
     VitaminLogCreate, VitaminLogUpdate, VitaminLogResponse,
     ReminderCreate, ReminderUpdate, ReminderResponse, ReminderItem,
     ContactCreate, ContactResponse,
@@ -594,24 +595,6 @@ def create_batch(batch_data: BatchCreate, db: Session = Depends(get_db), admin: 
         for cage in batch_data.cages:
             db.add(Cage(batch_id=batch.id, user_id=admin.id, name=cage.name, head_count=cage.head_count))
 
-    # Piglet purchase cost is booked straight into the expense ledger so the
-    # production cycle's P&L reflects the cost of the animals from day one.
-    if batch_data.piglet_cost_amount and batch_data.piglet_cost_amount > 0:
-        db.add(Expense(
-            batch_id=batch.id,
-            user_id=admin.id,
-            category=ExpenseCategory.PIGLETS.value,
-            description=(batch_data.piglet_cost_description or "").strip()
-            or f"Purchase of {total_heads} piglet{'s' if total_heads != 1 else ''}",
-            quantity=float(total_heads),
-            unit_price=round(batch_data.piglet_cost_amount / total_heads, 2),
-            amount=round(batch_data.piglet_cost_amount, 2),
-            date=batch_data.piglet_cost_date or batch_data.start_date,
-            head_count=total_heads,
-            source="batch",
-            recorded_by_id=admin.id,
-        ))
-
     try:
         db.commit()
     except IntegrityError:
@@ -1096,26 +1079,77 @@ def _inventory_ledger_category(item):
     return mapping.get(item.category, "inventory")
 
 
-def _find_batch_expense(db, item, batch_id, user_id):
-    """Find today's auto-generated expense for the same item + production batch.
-    Lets ONE ledger entry cover one or multiple inventory batches (restock
-    lines) added to the same batch on the same day."""
+# Canonical feed types — each maps to a distinct inventory item (category "feed")
+# that carries its own stock level and unit cost per production stage.
+FEED_TYPE_NAMES = {
+    FeedType.PRE_STARTER.value: "Pre-Starter Feed",
+    FeedType.STARTER.value: "Starter Feed",
+    FeedType.GROWER.value: "Grower Feed",
+    FeedType.FINISHER.value: "Finisher Feed",
+}
+
+
+def _normalize_feed_name(name):
+    """Lowercase name with hyphens/spaces collapsed for fuzzy matching."""
+    return " ".join(name.lower().replace("-", " ").split())
+
+
+def _ensure_feed_item(db, user_id, feed_type):
+    """Resolve the inventory item for a feed type, creating it on first use.
+    Matches any existing user feed item whose name starts with the type keyword
+    (e.g. "grower", "grower 20kg") so user-named items are reused instead of
+    duplicated. Pre-starter never collides with starter because the prefix
+    requires both "pre" and "starter" tokens."""
+    tokens = feed_type.replace("_", "-").split("-")
+    existing = None
+    candidates = db.query(InventoryItem).filter(
+        InventoryItem.user_id == user_id,
+        InventoryItem.category == "feed",
+    ).all()
+    for it in candidates:
+        parts = _normalize_feed_name(it.name).split()
+        if parts[: len(tokens)] == tokens:
+            existing = it
+            break
+    if not existing:
+        existing = InventoryItem(
+            name=FEED_TYPE_NAMES[feed_type],
+            user_id=user_id,
+            category="feed",
+            unit="kg",
+            stock_qty=0.0,
+            threshold_qty=0.0,
+            unit_cost=0.0,
+            supplier="",
+            notes="",
+        )
+        db.add(existing)
+        db.flush()
+    return existing
+
+
+def _find_batch_expense(db, item, batch_id, user_id, expense_date=None):
+    """Find the auto-generated expense for the same item + production batch on a
+    given date (defaults to today). Lets ONE ledger entry cover one or multiple
+    inventory batches (restock lines) added to the same batch on the same day."""
+    expense_date = expense_date or date.today()
     return db.query(Expense).filter(
         Expense.batch_id == batch_id,
         Expense.user_id == user_id,
         Expense.inventory_item_id == item.id,
-        Expense.date == date.today(),
+        Expense.date == expense_date,
         Expense.source == "inventory",
     ).first()
 
 
-def _link_inventory_expense(db, item, qty, unit_cost, batch_id, notes, action="restock"):
+def _link_inventory_expense(db, item, qty, unit_cost, batch_id, notes, action="restock", expense_date=None):
     """Create (or extend) the ledger expense for an inventory batch. Restocks
     ALWAYS write an expense; the amount/quantity accumulate into one entry when
     the same item is restocked for the same batch on the same day."""
     unit_cost = unit_cost or item.unit_cost or 0.0
     amount = round(qty * unit_cost, 2)
-    expense = _find_batch_expense(db, item, batch_id, item.user_id)
+    expense_date = expense_date or date.today()
+    expense = _find_batch_expense(db, item, batch_id, item.user_id, expense_date)
     if expense:
         expense.amount = round(expense.amount + amount, 2)
         expense.quantity = round((expense.quantity or 0.0) + qty, 2)
@@ -1130,7 +1164,7 @@ def _link_inventory_expense(db, item, qty, unit_cost, batch_id, notes, action="r
         quantity=qty,
         unit_price=unit_cost,
         amount=amount,
-        date=date.today(),
+        date=expense_date,
         source="inventory",
         inventory_item_id=item.id,
     )
@@ -1182,6 +1216,20 @@ def low_stock_alerts(db: Session = Depends(get_db), current_user: User = Depends
         if (i.threshold_qty and i.stock_qty <= i.threshold_qty) or (not i.threshold_qty and i.stock_qty <= 0)
     ]
     return [_serialize_inventory_item(i) for i in low]
+
+
+@app.get("/api/inventory/feed-types", response_model=List[InventoryItemResponse])
+def list_feed_types(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Ensure the four canonical feed-type items exist for this account and
+    return them (pre-starter, starter, grower, finisher). Feed purchases are
+    restocked against these items so per-type stock and pricing stay tracked."""
+    result = []
+    for feed_type in FEED_TYPE_NAMES:
+        result.append(_ensure_feed_item(db, current_user.id, feed_type))
+    db.commit()
+    for item in result:
+        db.refresh(item)
+    return [_serialize_inventory_item(i) for i in result]
 
 
 @app.get("/api/inventory/transactions", response_model=List[InventoryTransactionResponse])
@@ -1287,6 +1335,43 @@ def issue_item(item_id: int, data: IssueRequest, db: Session = Depends(get_db), 
         notes=data.notes or "",
         creates_expense=False,
         expense_id=None,
+        recorded_by_id=current_user.id,
+    )
+    db.add(txn)
+    db.commit()
+    db.refresh(txn)
+    return txn
+
+
+@app.post("/api/batches/{batch_id}/feed-purchase", response_model=InventoryTransactionResponse)
+def record_feed_purchase(batch_id: int, data: FeedPurchaseRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Process a feed purchase for a production batch: resolves the exact feed
+    type's inventory item (creating it if needed), stocks the quantity in,
+    and auto-books a "feed" expense tagged with batch_id + inventory_item_id."""
+    _ensure_batch_open(_get_batch_or_404(batch_id, db, current_user.id))
+    item = _ensure_feed_item(db, current_user.id, data.feed_type.value)
+    unit_cost = data.unit_cost or item.unit_cost or 0.0
+
+    expense = _link_inventory_expense(
+        db, item, data.qty, unit_cost, batch_id, data.notes,
+        expense_date=data.purchase_date,
+    )
+
+    item.stock_qty += data.qty
+    item.unit_cost = unit_cost
+    item.last_restocked_at = datetime.utcnow()
+
+    txn = InventoryTransaction(
+        item_id=item.id,
+        user_id=current_user.id,
+        type=TransactionType.RESTOCK.value,
+        qty=data.qty,
+        unit_cost=unit_cost,
+        total_cost=round(data.qty * unit_cost, 2),
+        batch_id=batch_id,
+        notes=data.notes or "",
+        creates_expense=True,
+        expense_id=expense.id,
         recorded_by_id=current_user.id,
     )
     db.add(txn)
