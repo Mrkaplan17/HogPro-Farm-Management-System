@@ -94,7 +94,7 @@ export default function Vitamins() {
   const pendingCount = reminders.filter((r) => r.status === 'pending').length
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       <header>
         <h1 className="text-2xl font-bold text-slate-900">Vitamins &amp; Health Schedule</h1>
         <p className="text-sm text-slate-500 mt-0.5">Deworming / vitamin injections and upcoming due dates.</p>

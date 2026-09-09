@@ -205,6 +205,13 @@ body {
   }
 }
 
+/* Wide data tables keep full column widths and scroll horizontally on smaller screens */
+@media screen {
+  .overflow-x-auto table {
+    min-width: max-content;
+  }
+}
+
 @page {
   size: A4;
   margin: 12mm 14mm 24mm 14mm;

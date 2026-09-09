@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, Settings as SettingsIcon, PiggyBank, LogOut } from 'lucide-react'
+import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, Settings as SettingsIcon, PiggyBank, LogOut, Menu } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import DevCredit from './DevCredit'
 import NotificationBell from './NotificationBell'
@@ -10,6 +10,16 @@ export default function Layout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [confirmLogout, setConfirmLogout] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  useEffect(() => {
+    if (!sidebarOpen) return
+    function onKey(e) {
+      if (e.key === 'Escape') setSidebarOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [sidebarOpen])
 
   function handleLogout() {
     logout()
@@ -27,7 +37,18 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen flex bg-slate-50">
-      <aside className="w-64 bg-slate-900 text-white flex flex-col fixed inset-y-0 left-0 z-20">
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-[35] bg-black/50 backdrop-blur-sm lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white flex flex-col transition-transform duration-200 ease-in-out ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } lg:translate-x-0`}
+      >
         <div className="p-6 border-b border-slate-800 flex items-center gap-3">
           <div className="bg-pink-600 rounded-xl p-2">
             <PiggyBank className="w-6 h-6" />
@@ -38,13 +59,14 @@ export default function Layout() {
           </div>
         </div>
 
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           <p className="px-4 pb-2 text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Menu</p>
           {navItems.map((item) => (
             <NavLink
               key={item.label}
               to={item.to}
               end={item.end}
+              onClick={() => setSidebarOpen(false)}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                   isActive
@@ -76,12 +98,22 @@ export default function Layout() {
         </div>
       </aside>
 
-      <div className="flex-1 ml-64 flex flex-col">
-        <header className="sticky top-0 z-30 h-16 bg-white/85 backdrop-blur border-b border-slate-200 flex items-center justify-end gap-3 px-6 print:hidden">
+      <div className="flex-1 lg:ml-64 flex flex-col min-w-0">
+        <header className="sticky top-0 z-30 h-16 bg-white/85 backdrop-blur border-b border-slate-200 flex items-center gap-3 px-4 sm:px-6 print:hidden">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="lg:hidden p-2 -ml-1 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100"
+            title="Open menu"
+            aria-label="Open menu"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
           <span className="text-sm text-slate-400 hidden sm:block">
             {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
           </span>
-          <NotificationBell />
+          <div className="ml-auto flex items-center gap-3">
+            <NotificationBell />
+          </div>
         </header>
         <main className="flex-1">
           <Outlet />

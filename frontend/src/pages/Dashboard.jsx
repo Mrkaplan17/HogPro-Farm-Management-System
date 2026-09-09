@@ -76,7 +76,7 @@ export default function Dashboard() {
   const scopeBatches = dashboard.batches.filter((s) => scope === 'all' || s.batch.status === scope)
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {showPrint && (
         <InsightsPrintOverlay
           rows={visible}
@@ -88,7 +88,7 @@ export default function Dashboard() {
         />
       )}
 
-      <header className="flex items-center justify-between">
+      <header className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Executive Dashboard</h1>
           <p className="text-sm text-slate-500 mt-0.5">Batch profitability &amp; operational insights.</p>

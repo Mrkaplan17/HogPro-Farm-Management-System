@@ -74,11 +74,11 @@ export default function GroupDetail() {
   ]
 
   if (loading) return <PageSkeleton cards={3} />
-  if (error) return <div className="p-8 max-w-7xl mx-auto text-red-500">Error: {error}</div>
-  if (!group) return <div className="p-8 max-w-7xl mx-auto text-slate-500">Group not found</div>
+  if (error) return <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto text-red-500">Error: {error}</div>
+  if (!group) return <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto text-slate-500">Group not found</div>
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {showReport && (
         <ReportOverlay
           statement={statement}

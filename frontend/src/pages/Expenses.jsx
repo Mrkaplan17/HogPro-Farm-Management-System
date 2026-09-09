@@ -40,7 +40,7 @@ export default function Expenses() {
   const hasBatchFilter = Boolean(batchFilter)
 
   return (
-    <div className="p-8 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       <header>
         <h1 className="text-2xl font-bold text-slate-900">Expenses Ledger</h1>
         <p className="text-sm text-slate-500 mt-0.5">Auto-generated from inventory restocks and production batches — audit spend per production cycle.</p>
