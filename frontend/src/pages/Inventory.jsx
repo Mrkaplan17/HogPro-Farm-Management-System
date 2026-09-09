@@ -225,6 +225,7 @@ export default function Inventory() {
         maxWidth="max-w-2xl"
         icon={action?.type === 'restock' ? <PackagePlus className="w-5 h-5" /> : <PackageMinus className="w-5 h-5" />}
       >
+        {action && (
         <form onSubmit={submitTxn} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
@@ -267,6 +268,7 @@ export default function Inventory() {
             </button>
           </div>
         </form>
+        )}
       </Modal>
 
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
