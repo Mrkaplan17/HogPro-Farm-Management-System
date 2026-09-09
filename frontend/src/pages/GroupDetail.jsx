@@ -51,7 +51,7 @@ export default function GroupDetail() {
         api.getExpenses(id),
         api.getMortalities(id),
         isAdmin ? api.getSales(id) : Promise.resolve([]),
-        isAdmin ? api.getExpenseBreakdown(id) : Promise.resolve({}),
+        isAdmin ? api.getExpenseBreakdown(id).then((r) => (r && r.breakdown) || {}) : Promise.resolve({}),
       ])
       setGroup(g)
       setExpenses(e)
@@ -202,6 +202,7 @@ export default function GroupDetail() {
           sales={sales}
           group={group}
           totalHeadsLost={totalHeadsLost}
+          totalHeadsSold={totalHeadsSold}
         />
       )}
 
@@ -238,7 +239,7 @@ export default function GroupDetail() {
 
 /* ─────────── OVERVIEW ─────────── */
 
-function OverviewSection({ isAdmin, breakdown, expenses, sales, group, totalHeadsLost }) {
+function OverviewSection({ isAdmin, breakdown, expenses, sales, group, totalHeadsLost, totalHeadsSold }) {
   const expList = expenses || []
   const saleList = sales || []
 
