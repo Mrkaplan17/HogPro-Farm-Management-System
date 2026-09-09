@@ -1,7 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
-  "rootDirectory": "frontend",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://piggery-api.onrender.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
