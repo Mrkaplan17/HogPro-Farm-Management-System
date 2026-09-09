@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, PackagePlus, PackageMinus, AlertTriangle, Boxes } from 'lucide-react'
+import { Plus, Trash2, PackagePlus, PackageMinus, AlertTriangle, Boxes, Undo2 } from 'lucide-react'
 import { api } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { Skeleton } from '../components/Skeleton'
@@ -21,6 +21,7 @@ export default function Inventory() {
   const [txn, setTxn] = useState({ qty: '', unit_cost: '', batch_id: '', notes: '' })
   const [batches, setBatches] = useState([])
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [cancelTarget, setCancelTarget] = useState(null)
 
   async function loadAll() {
     setLoading(true)
@@ -86,6 +87,10 @@ export default function Inventory() {
 
   async function removeItem(item) {
     try { await api.deleteInventoryItem(item.id); loadAll() } catch (err) { setBanner(err.message) }
+  }
+
+  async function cancelTxn(txn) {
+    try { await api.cancelInventoryTransaction(txn.id); loadAll() } catch (err) { setBanner(err.message) }
   }
 
   const lowItems = items.filter((i) => i.is_low_stock)
@@ -280,11 +285,12 @@ export default function Inventory() {
                 <th className="py-3 px-5">Batch</th>
                 <th className="py-3 px-5">Notes</th>
                 <th className="py-3 px-5">Expense?</th>
+                <th className="py-3 px-5 w-24" />
               </tr>
             </thead>
             <tbody>
               {transactions.length === 0 && (
-                <tr><td colSpan="7" className="py-12 text-center text-slate-400">No stock movements yet.</td></tr>
+                <tr><td colSpan="8" className="py-12 text-center text-slate-400">No stock movements yet.</td></tr>
               )}
               {transactions.map((t) => {
                 const item = items.find((i) => i.id === t.item_id)
@@ -302,6 +308,17 @@ export default function Inventory() {
                     <td className="py-3 px-5">{batch?.name || '—'}</td>
                     <td className="py-3 px-5 text-slate-600">{t.notes || '—'}</td>
                     <td className="py-3 px-5">{t.creates_expense ? `Yes (₱${(t.total_cost || t.qty * (t.unit_cost || 0)).toLocaleString()})` : '—'}</td>
+                    <td className="py-3 px-5 text-right">
+                      {isAdmin && t.type === 'restock' && (
+                        <button
+                          onClick={() => setCancelTarget(t)}
+                          title="Cancel this restock & reverse its expense"
+                          className="inline-flex items-center gap-1 text-xs text-red-500 hover:text-red-700 font-medium"
+                        >
+                          <Undo2 className="w-3.5 h-3.5" /> Cancel
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 )
               })}
@@ -317,6 +334,16 @@ export default function Inventory() {
         title="Delete this item?"
         message={`"${deleteTarget?.name}" and its full transaction history will be permanently removed.`}
         confirmLabel="Delete"
+        danger
+      />
+
+      <ConfirmDialog
+        open={Boolean(cancelTarget)}
+        onClose={() => setCancelTarget(null)}
+        onConfirm={() => { cancelTxn(cancelTarget); setCancelTarget(null) }}
+        title="Cancel this restock?"
+        message={`The ${cancelTarget?.qty} unit(s) will be removed from stock and the ledger expense for this purchase (₱${(cancelTarget?.total_cost || 0).toLocaleString()}) will be reversed.`}
+        confirmLabel="Cancel restock"
         danger
       />
     </div>

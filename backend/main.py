@@ -588,6 +588,30 @@ def close_batch(batch_id: int, db: Session = Depends(get_db), admin: User = Depe
 def delete_batch(batch_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
     batch = _get_batch_or_404(batch_id, db)
     _ensure_batch_open(batch)
+
+    # Detach non-owning child rows so the batch delete doesn't trip FK checks:
+    # inventory restocks, health logs and schedule reminders are stock/history
+    # records that simply lose their batch grouping when the batch goes away.
+    db.query(InventoryTransaction).filter(InventoryTransaction.batch_id == batch.id).update(
+        {"batch_id": None}, synchronize_session=False
+    )
+    db.query(VitaminLog).filter(VitaminLog.batch_id == batch.id).update(
+        {"batch_id": None}, synchronize_session=False
+    )
+    db.query(Reminder).filter(Reminder.batch_id == batch.id).update(
+        {"batch_id": None}, synchronize_session=False
+    )
+
+    # Expenses are reversed at their source: only the batch-sourced piglet cost
+    # (and any legacy manual rows filed under this batch) die with the batch.
+    # Inventory round-trip expenses survive — deleting a group must not erase the
+    # cost of stock that was actually purchased; those die when the restock is
+    # cancelled or the inventory item is deleted.
+    db.query(Expense).filter(Expense.batch_id == batch.id, Expense.source == "inventory").update(
+        {"batch_id": None}, synchronize_session=False
+    )
+    db.query(Expense).filter(Expense.batch_id == batch.id).delete(synchronize_session=False)
+
     db.delete(batch)
     db.commit()
     return {"message": "Batch deleted"}
@@ -1173,6 +1197,54 @@ def issue_item(item_id: int, data: IssueRequest, db: Session = Depends(get_db), 
     db.commit()
     db.refresh(txn)
     return txn
+
+
+@app.delete("/api/inventory/transactions/{txn_id}")
+def cancel_inventory_transaction(txn_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    """Cancel a restock at its source: reverses the stock movement and removes
+    (or partially deducts) the auto-booked ledger expense it created.
+
+    Issues carry no ledger expense, so they are locked to keep the movement
+    history a consistent audit trail."""
+    txn = db.query(InventoryTransaction).filter(InventoryTransaction.id == txn_id).first()
+    if not txn:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if txn.type != TransactionType.RESTOCK.value:
+        raise HTTPException(status_code=400, detail="Only restock (purchase) entries can be cancelled.")
+
+    item = _item_or_404(txn.item_id, db)
+
+    if txn.creates_expense and txn.expense_id:
+        expense = db.query(Expense).filter(Expense.id == txn.expense_id).first()
+        if expense:
+            remaining_qty = round((expense.quantity or 0.0) - txn.qty, 4)
+            remaining_amount = round((expense.amount or 0.0) - (txn.total_cost or 0.0), 2)
+            if remaining_amount > 0.01 and remaining_qty > 0:
+                # Partial cancellation: the ledger entry shares other restock
+                # lines for the same item/batch/day, so just deduct this line.
+                expense.quantity = remaining_qty
+                expense.amount = remaining_amount
+                expense.unit_price = round(remaining_amount / remaining_qty, 2)
+                expense.description = f"{item.name} (restock {remaining_qty:g} {item.unit})"
+            else:
+                # Full reversal: drop the expense and unlink any other lines
+                # that pointed at it.
+                db.query(InventoryTransaction).filter(
+                    InventoryTransaction.expense_id == expense.id
+                ).update({"expense_id": None}, synchronize_session=False)
+                db.delete(expense)
+                creating_lines = db.query(InventoryTransaction).filter(
+                    InventoryTransaction.item_id == item.id,
+                    InventoryTransaction.type == TransactionType.RESTOCK.value,
+                ).all()
+                for other in creating_lines:
+                    if other.id != txn.id and not other.expense_id and other.creates_expense:
+                        other.creates_expense = False
+
+    item.stock_qty = round(item.stock_qty - txn.qty, 4)
+    db.delete(txn)
+    db.commit()
+    return {"message": "Restock cancelled"}
 
 
 # ─── VITAMINS / HEALTH SCHEDULE ─────────────────────────────────────

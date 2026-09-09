@@ -95,6 +95,7 @@ export const api = {
   restockItem: (id, data) => post(`/inventory/${id}/restock`, data),
   issueItem: (id, data) => post(`/inventory/${id}/issue`, data),
   getInventoryTransactions: (params) => request(`/inventory/transactions${qs(params)}`),
+  cancelInventoryTransaction: (id) => del(`/inventory/transactions/${id}`),
 
   // ── Vitamins / health schedule ──
   getVitamins: (params) => request(`/vitamins${qs(params)}`),

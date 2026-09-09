@@ -759,8 +759,7 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
             <span key="u" className="text-slate-600">₱{Number(e.unit_price || 0).toLocaleString()}</span>,
             <span key="a" className="font-medium text-red-600">₱{e.amount.toLocaleString()}</span>,
           ]}
-          onDelete={!isAdmin ? null : isLocked ? null : async (e) => { await api.deleteExpense(e.id); loadAll() }}
-          confirmDelete={{ title: 'Delete this expense?', message: 'This expense entry will be permanently removed from the ledger.' }}
+          onDelete={null}
         />
       </SectionCard>
     </div>

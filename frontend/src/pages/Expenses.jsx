@@ -1,22 +1,18 @@
 import { useEffect, useState } from 'react'
-import { Trash2, PackagePlus, Info } from 'lucide-react'
+import { PackagePlus, Info } from 'lucide-react'
 import { api } from '../api'
-import { useAuth } from '../auth/AuthContext'
 import { MONEY } from '../components/InsightCharts'
 import { Skeleton } from '../components/Skeleton'
-import { ConfirmDialog } from '../components/Modal'
 
 const CATEGORIES = ['piglets', 'feed', 'medicine', 'veterinary', 'utilities', 'labor', 'maintenance', 'inventory', 'misc']
 
 export default function Expenses() {
-  const { isAdmin } = useAuth()
   const [expenses, setExpenses] = useState([])
   const [batches, setBatches] = useState([])
   const [category, setCategory] = useState('')
   const [batchFilter, setBatchFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState(null)
 
   async function loadAll() {
     setLoading(true)
@@ -39,10 +35,6 @@ export default function Expenses() {
 
   useEffect(() => { loadAll() }, [category, batchFilter])
 
-  async function remove(id) {
-    try { await api.deleteExpense(id); loadAll() } catch (err) { setError(err.message) }
-  }
-
   const total = expenses.reduce((s, x) => s + x.amount, 0)
   const batchName = (id) => batches.find((b) => b.id === Number(id))?.name || ''
   const hasBatchFilter = Boolean(batchFilter)
@@ -60,7 +52,8 @@ export default function Expenses() {
         <Info className="w-4 h-4 shrink-0 mt-0.5" />
         <p>
           Expenses are written automatically when you restock inventory or create a production batch.
-          There is no manual entry form, so the ledger always matches what you actually bought.
+          Ledger rows can't be edited or deleted here — they are reversed at their source by
+          deleting the group (piglet cost) or cancelling the restock that generated them.
         </p>
       </div>
 
@@ -131,11 +124,6 @@ export default function Expenses() {
                         {e.source === 'batch' ? 'batch' : e.source || 'manual'}
                       </span>
                     </td>
-                    {isAdmin && e.source === 'manual' && (
-                      <td className="py-3 px-5 w-14 text-right">
-                        <button onClick={() => setDeleteTarget(e.id)} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
-                      </td>
-                    )}
                   </tr>
                 ))}
               </tbody>
@@ -143,16 +131,6 @@ export default function Expenses() {
           </div>
         </div>
       )}
-
-      <ConfirmDialog
-        open={Boolean(deleteTarget)}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={() => { remove(deleteTarget); setDeleteTarget(null) }}
-        title="Delete expense?"
-        message="This expense entry will be permanently removed from the ledger."
-        confirmLabel="Delete"
-        danger
-      />
     </div>
   )
 }
