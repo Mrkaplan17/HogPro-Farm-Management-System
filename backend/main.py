@@ -79,7 +79,7 @@ def _validate_config():
     if os.environ.get("PIGGERY_SECRET", "piggery-dev-secret-change-me-in-production") == "piggery-dev-secret-change-me-in-production":
         log.warning("PIGGERY_SECRET is still the dev default — set a random secret in production.")
     if not os.environ.get("CORS_ORIGINS"):
-        log.warning("CORS_ORIGINS is not set — using defaults (https://hpfms.netlify.app + localhost dev origins). Set it explicitly if you need more origins.")
+        log.warning("CORS_ORIGINS is not set — using defaults (https://hogpro-fms.vercel.app + hpfms.netlify.app + localhost dev origins). Set it explicitly if you need more origins.")
     if not os.environ.get("GOOGLE_CLIENT_ID"):
         log.warning("GOOGLE_CLIENT_ID not set — Google login button is hidden.")
     if not os.environ.get("FACEBOOK_APP_ID") or not os.environ.get("FACEBOOK_APP_SECRET"):
@@ -90,7 +90,7 @@ def _validate_config():
 
 app = FastAPI(title="HogPros API — Farm Management & Batch Profitability", version="3.0.0")
 
-_default_origins = ["https://hpfms.netlify.app", "http://localhost:5173", "http://localhost:3000"]
+_default_origins = ["https://hogpro-fms.vercel.app", "https://hpfms.netlify.app", "http://localhost:5173", "http://localhost:3000"]
 _origins_env = os.environ.get("CORS_ORIGINS")
 origins = ([o.strip() for o in _origins_env.split(",") if o.strip()] if _origins_env else _default_origins)
 
@@ -102,7 +102,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://hpfms.netlify.app")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://hogpro-fms.vercel.app")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 FACEBOOK_APP_ID = os.environ.get("FACEBOOK_APP_ID", "")
 FACEBOOK_APP_SECRET = os.environ.get("FACEBOOK_APP_SECRET", "")
