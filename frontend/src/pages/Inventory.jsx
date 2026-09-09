@@ -242,8 +242,13 @@ export default function Inventory() {
               <label className="block text-sm font-medium text-slate-700 mb-1">Batch (optional)</label>
               <select value={txn.batch_id} onChange={(e) => setTxn({ ...txn, batch_id: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
                 <option value="">None / general</option>
-                {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                {batches.map((b) => (
+                  <option key={b.id} value={b.id} disabled={b.status === 'closed'}>
+                    {b.name}{b.status === 'closed' ? ' (locked)' : ''}
+                  </option>
+                ))}
               </select>
+              <p className="text-[11px] text-slate-400 mt-1">Closed batches are locked &amp; can't receive stock movements.</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>

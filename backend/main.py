@@ -716,7 +716,7 @@ def _apply_expense_fields(expense: Expense, data: ExpenseCreate, db: Session):
 @app.post("/api/expenses", response_model=ExpenseResponse)
 def create_expense(data: ExpenseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if data.batch_id:
-        _get_batch_or_404(data.batch_id, db)
+        _ensure_batch_open(_get_batch_or_404(data.batch_id, db))
     if data.inventory_item_id:
         item = _item_or_404(data.inventory_item_id, db)
         expense = Expense(recorded_by_id=current_user.id, source="inventory")
@@ -1146,6 +1146,8 @@ def delete_inventory_item(item_id: int, db: Session = Depends(get_db), admin: Us
 @app.post("/api/inventory/{item_id}/restock", response_model=InventoryTransactionResponse)
 def restock_item(item_id: int, data: RestockRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = _item_or_404(item_id, db)
+    if data.batch_id:
+        _ensure_batch_open(_get_batch_or_404(data.batch_id, db))
     unit_cost = data.unit_cost or item.unit_cost or 0.0
 
     # Auto-booked: a restock is a purchase, so the ledger entry is written here,
@@ -1177,6 +1179,8 @@ def restock_item(item_id: int, data: RestockRequest, db: Session = Depends(get_d
 @app.post("/api/inventory/{item_id}/issue", response_model=InventoryTransactionResponse)
 def issue_item(item_id: int, data: IssueRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     item = _item_or_404(item_id, db)
+    if data.batch_id:
+        _ensure_batch_open(_get_batch_or_404(data.batch_id, db))
     if data.qty > item.stock_qty:
         raise HTTPException(status_code=400, detail=f"Cannot issue {data.qty:g} {item.unit} — only {item.stock_qty:g} in stock.")
 
