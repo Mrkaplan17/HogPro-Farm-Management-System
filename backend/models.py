@@ -72,7 +72,8 @@ class Batch(Base):
     __tablename__ = "batches"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), unique=True, nullable=False)
+    name = Column(String(100), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     initial_head_count = Column(Integer, nullable=False)
     current_head_count = Column(Integer, nullable=False)
     start_date = Column(Date, nullable=False)
@@ -90,12 +91,15 @@ class Batch(Base):
     vitamin_logs = relationship("VitaminLog", back_populates="batch")
     transactions = relationship("InventoryTransaction", back_populates="batch")
 
+    __table_args__ = (Index("uq_batches_user_name", "user_id", "name", unique=True),)
+
 
 class Cage(Base):
     __tablename__ = "cages"
 
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String(50), nullable=False)
     head_count = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -110,6 +114,7 @@ class Sale(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     heads_sold = Column(Integer, nullable=False)
     weight_kg = Column(Float, nullable=False)
     price_per_kilo = Column(Float, nullable=False)
@@ -131,6 +136,7 @@ class SaleItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     cage_id = Column(Integer, ForeignKey("cages.id"), nullable=True)
     tag_id = Column(String(50), default="")
     head_count = Column(Integer, default=1)
@@ -148,6 +154,7 @@ class Mortality(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     cage_id = Column(Integer, ForeignKey("cages.id"), nullable=True)
     date = Column(Date, nullable=False)
     head_count = Column(Integer, nullable=False)
@@ -166,6 +173,7 @@ class Expense(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)   # optional (general ledger)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     category = Column(String(50), nullable=False)
     description = Column(String(255), nullable=False)
     quantity = Column(Float, default=1.0)
@@ -192,6 +200,7 @@ class InventoryItem(Base):
     __tablename__ = "inventory_items"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String(120), nullable=False)
     category = Column(String(20), nullable=False)                # feed | medicine | vitamin | supplies
     unit = Column(String(20), default="kg")                     # kg | sack | bottle | vial | ml | piece
@@ -216,6 +225,7 @@ class InventoryTransaction(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     type = Column(String(10), nullable=False)                   # restock | issue
     qty = Column(Float, nullable=False)
     unit_cost = Column(Float, default=0.0)
@@ -239,6 +249,7 @@ class VitaminLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     cage_id = Column(Integer, ForeignKey("cages.id"), nullable=True)
     vitamin_name = Column(String(120), nullable=False)
     dosage = Column(Float, default=0.0)
@@ -259,6 +270,7 @@ class Reminder(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(150), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     description = Column(Text, default="")
     reminder_type = Column(String(20), default="general")       # vitamin | general
     batch_id = Column(Integer, ForeignKey("batches.id"), nullable=True)
