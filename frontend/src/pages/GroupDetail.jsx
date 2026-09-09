@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useParams, Link } from 'react-router-dom'
-import { Plus, Trash2, Lock, Pencil, Check, X, ArrowLeft, Grid3x3, Users, Printer, Skull } from 'lucide-react'
+import { Plus, Trash2, Lock, Pencil, Check, X, ArrowLeft, Grid3x3, Users, Printer, Skull, TrendingUp } from 'lucide-react'
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import { useAuth } from '../auth/AuthContext'
 import { MONEY } from '../components/InsightCharts'
 import DevCredit from '../components/DevCredit'
 import { PageSkeleton } from '../components/Skeleton'
+import Modal, { ConfirmDialog } from '../components/Modal'
 
 const EXPENSE_CATEGORIES = ['piglets', 'feed', 'medicine', 'veterinary', 'utilities', 'labor', 'maintenance', 'misc']
 
@@ -24,6 +25,7 @@ export default function GroupDetail() {
   const [error, setError] = useState('')
   const [showReport, setShowReport] = useState(false)
   const [statement, setStatement] = useState(null)
+  const [closeTarget, setCloseTarget] = useState(false)
 
   const isLocked = group?.status === 'closed'
   const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0)
@@ -111,14 +113,12 @@ export default function GroupDetail() {
             )}
             {isAdmin && !isLocked && (
               <button
-                onClick={async () => {
+                onClick={() => {
                   if (group.current_head_count > 0) {
                     alert(`Cannot close: ${group.current_head_count} heads still remaining. Record all sales first.`)
                     return
                   }
-                  if (confirm('Close and lock this group? All records become read-only history.')) {
-                    try { await api.closeBatch(group.id); loadAll() } catch (e) { alert(e.message) }
-                  }
+                  setCloseTarget(true)
                 }}
                 className="px-4 py-2 text-sm border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50 font-medium"
               >
@@ -213,6 +213,18 @@ export default function GroupDetail() {
       {tab === 'mortalities' && (
         <MortalitiesSection batchId={id} mortalities={mortalities} cages={group.cages} isLocked={isLocked} isAdmin={isAdmin} loadAll={loadAll} />
       )}
+
+      <ConfirmDialog
+        open={closeTarget}
+        onClose={() => setCloseTarget(false)}
+        onConfirm={async () => {
+          try { await api.closeBatch(group.id); setCloseTarget(false); loadAll() } catch (e) { setCloseTarget(false); alert(e.message) }
+        }}
+        title="Close and lock this group?"
+        message="All records become read-only history. This cannot be undone."
+        confirmLabel="Close & Lock"
+        danger
+      />
     </div>
   )
 }
@@ -509,6 +521,7 @@ function LedgerSection({ expenses, sales, isLocked }) {
 function CagesSection({ group, isLocked, isAdmin, loadAll }) {
   const [adding, setAdding] = useState(false)
   const [editId, setEditId] = useState(null)
+  const [removeTarget, setRemoveTarget] = useState(null)
   const [form, setForm] = useState({ name: '', head_count: '' })
   const [editForm, setEditForm] = useState({ name: '', head_count: '' })
   const canEdit = isAdmin && !isLocked
@@ -533,7 +546,6 @@ function CagesSection({ group, isLocked, isAdmin, loadAll }) {
   }
 
   async function remove(cid) {
-    if (!confirm('Remove this cage?')) return
     try { await api.deleteCage(cid); loadAll() } catch (err) { alert(err.message) }
   }
 
@@ -598,7 +610,7 @@ function CagesSection({ group, isLocked, isAdmin, loadAll }) {
                     {canEdit && (
                       <div className="flex gap-1">
                         <button onClick={() => { setEditId(c.id); setEditForm({ name: c.name, head_count: c.head_count }) }} className="p-1.5 text-slate-400 hover:text-pink-600"><Pencil className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => remove(c.id)} className="p-1.5 text-slate-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setRemoveTarget(c)} className="p-1.5 text-slate-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
                     )}
                   </>
@@ -608,6 +620,16 @@ function CagesSection({ group, isLocked, isAdmin, loadAll }) {
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(removeTarget)}
+        onClose={() => setRemoveTarget(null)}
+        onConfirm={() => { remove(removeTarget.id); setRemoveTarget(null) }}
+        title="Remove this cage?"
+        message={`"${removeTarget?.name}" and its piglets will be removed from the group.`}
+        confirmLabel="Remove"
+        danger
+      />
     </div>
   )
 }
@@ -660,13 +682,13 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
       {isLocked && <LockedNotice />}
       {!isLocked && (
         <div className="flex justify-end">
-          <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
             <Plus className="w-4 h-4" /> Add Expense
           </button>
         </div>
       )}
-      {showForm && !isLocked && (
-        <form onSubmit={submit} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
+      <Modal open={showForm && !isLocked} onClose={() => setShowForm(false)} title="Add Expense" subtitle="Record a cost against this group" maxWidth="max-w-2xl" icon={<Plus className="w-5 h-5" />}>
+        <form onSubmit={submit} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Category</label>
@@ -720,7 +742,7 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
             <button type="submit" className="px-5 py-2 text-sm text-white bg-pink-600 rounded-lg font-semibold">Save Expense</button>
           </div>
         </form>
-      )}
+      </Modal>
       <SectionCard title="Expense records" right={<span className="text-slate-600">Total · <strong className="text-red-600">₱{total.toLocaleString()}</strong></span>}>
         <DataTable
           headers={['Date', 'Category', 'Description', 'Group / Cage', 'Qty', 'Unit ₱', 'Amount']}
@@ -737,9 +759,8 @@ function ExpensesSection({ batchId, expenses, cages, isLocked, isAdmin, loadAll 
             <span key="u" className="text-slate-600">₱{Number(e.unit_price || 0).toLocaleString()}</span>,
             <span key="a" className="font-medium text-red-600">₱{e.amount.toLocaleString()}</span>,
           ]}
-          onDelete={!isAdmin ? null : isLocked ? null : async (e) => {
-            if (confirm('Delete this expense?')) { await api.deleteExpense(e.id); loadAll() }
-          }}
+          onDelete={!isAdmin ? null : isLocked ? null : async (e) => { await api.deleteExpense(e.id); loadAll() }}
+          confirmDelete={{ title: 'Delete this expense?', message: 'This expense entry will be permanently removed from the ledger.' }}
         />
       </SectionCard>
     </div>
@@ -835,13 +856,13 @@ function SalesSection({ batchId, sales, expenses, cages, isLocked, remainingHead
       {isLocked && <LockedNotice />}
       {!isLocked && (
         <div className="flex justify-end">
-          <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
             <Plus className="w-4 h-4" /> Record Sale
           </button>
         </div>
       )}
-      {showForm && !isLocked && (
-        <form onSubmit={submit} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
+      <Modal open={showForm && !isLocked} onClose={() => setShowForm(false)} title="Record Sale" subtitle="Sell heads from this group" maxWidth="max-w-4xl" icon={<TrendingUp className="w-5 h-5" />}>
+        <form onSubmit={submit} className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-sm text-slate-500">
               Heads available to sell: <strong className="text-slate-900">{headsAvailable}</strong>
@@ -940,7 +961,7 @@ function SalesSection({ batchId, sales, expenses, cages, isLocked, remainingHead
             <button type="submit" className="px-5 py-2 text-sm text-white bg-green-600 rounded-lg font-semibold">Save Sale</button>
           </div>
         </form>
-      )}
+      </Modal>
 
       <SectionCard title="Sales records" right={<span className="text-slate-600">Revenue · <strong className="text-green-600">₱{totalRevenue.toLocaleString()}</strong> ({totalHeadsSold} heads)</span>}>
         <DataTable
@@ -961,9 +982,8 @@ function SalesSection({ batchId, sales, expenses, cages, isLocked, remainingHead
               s.items?.length > 0 ? <span key="it" className="text-xs text-slate-500">{s.items.length} line{s.items.length > 1 ? 's' : ''}</span> : '—',
             ]
           }}
-          onDelete={isLocked ? null : async (s) => {
-            if (confirm('Delete this sale? Heads will be restored to the group.')) { await api.deleteSale(s.id); loadAll() }
-          }}
+          onDelete={isLocked ? null : async (s) => { await api.deleteSale(s.id); loadAll() }}
+          confirmDelete={{ title: 'Delete this sale?', message: 'This sale will be removed and heads restored to the selected cages.' }}
         />
       </SectionCard>
     </div>
@@ -999,13 +1019,13 @@ function MortalitiesSection({ batchId, mortalities, cages, isLocked, isAdmin, lo
       {isLocked && <LockedNotice />}
       {!isLocked && (
         <div className="flex justify-end">
-          <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
             <Skull className="w-4 h-4" /> Log Mortality
           </button>
         </div>
       )}
-      {showForm && !isLocked && (
-        <form onSubmit={submit} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
+      <Modal open={showForm && !isLocked} onClose={() => setShowForm(false)} title="Log Mortality" subtitle="Record heads lost in this group" maxWidth="max-w-xl" icon={<Skull className="w-5 h-5" />}>
+        <form onSubmit={submit} className="space-y-4">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Date</label>
@@ -1036,7 +1056,7 @@ function MortalitiesSection({ batchId, mortalities, cages, isLocked, isAdmin, lo
             <button type="submit" className="px-5 py-2 text-sm text-white bg-red-500 rounded-lg font-semibold">Log Mortality</button>
           </div>
         </form>
-      )}
+      </Modal>
 
       <SectionCard title="Mortality log" right={<span className="text-slate-600">Total lost · <strong className="text-red-600">{totalLost}</strong> heads</span>}>
         <DataTable
@@ -1052,9 +1072,8 @@ function MortalitiesSection({ batchId, mortalities, cages, isLocked, isAdmin, lo
             m.cause || '—',
             m.notes || '—',
           ]}
-          onDelete={!isAdmin ? null : isLocked ? null : async (m) => {
-            if (confirm('Delete this mortality record?')) { await api.deleteMortality(m.id); loadAll() }
-          }}
+          onDelete={!isAdmin ? null : isLocked ? null : async (m) => { await api.deleteMortality(m.id); loadAll() }}
+          confirmDelete={{ title: 'Delete this mortality record?', message: 'The lost heads will be restored to the group.' }}
         />
       </SectionCard>
     </div>
@@ -1260,7 +1279,8 @@ function SectionCard({ title, right, children }) {
   )
 }
 
-function DataTable({ headers, rows, locked, empty, renderRow, alignRight = [], onDelete }) {
+function DataTable({ headers, rows, locked, empty, renderRow, alignRight = [], onDelete, confirmDelete }) {
+  const [pending, setPending] = useState(null)
   const hasAction = !locked && onDelete != null
   return (
     <div className="overflow-x-auto">
@@ -1288,7 +1308,7 @@ function DataTable({ headers, rows, locked, empty, renderRow, alignRight = [], o
                 ))}
                 {hasAction && (
                   <td className="py-3 px-5 text-right">
-                    <button onClick={() => onDelete(r)} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
+                    <button onClick={() => setPending(r)} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
                   </td>
                 )}
               </tr>
@@ -1296,6 +1316,15 @@ function DataTable({ headers, rows, locked, empty, renderRow, alignRight = [], o
           })}
         </tbody>
       </table>
+      <ConfirmDialog
+        open={Boolean(pending)}
+        onClose={() => setPending(null)}
+        onConfirm={() => { onDelete(pending); setPending(null) }}
+        title={confirmDelete?.title || 'Delete this record?'}
+        message={confirmDelete?.message || 'This record will be permanently removed.'}
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }

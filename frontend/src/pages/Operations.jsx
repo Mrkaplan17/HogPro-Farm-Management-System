@@ -4,6 +4,7 @@ import { Plus, Lock, Trash2, Pencil, Check, X, Grid3x3, Users } from 'lucide-rea
 import { api } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import { TableSkeleton } from '../components/Skeleton'
+import Modal, { ConfirmDialog } from '../components/Modal'
 
 const EMPTY_CAGE = { name: '', head_count: '' }
 
@@ -16,6 +17,7 @@ export default function Operations() {
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState('')
   const [saving, setSaving] = useState(false)
+  const [confirmAction, setConfirmAction] = useState(null) // {type:'close'|'delete', id}
   const [form, setForm] = useState({
     name: '',
     initial_head_count: 50,
@@ -107,7 +109,6 @@ export default function Operations() {
   }
 
   async function handleClose(id) {
-    if (!confirm('Close this group? It locks all records as read-only history.')) return
     try {
       await api.closeBatch(id)
       load()
@@ -117,7 +118,6 @@ export default function Operations() {
   }
 
   async function handleDelete(id) {
-    if (!confirm('Delete this group? This cannot be undone.')) return
     try {
       await api.deleteBatch(id)
       load()
@@ -138,7 +138,7 @@ export default function Operations() {
           </p>
         </div>
         <button
-          onClick={() => setShowForm(!showForm)}
+          onClick={() => setShowForm(true)}
           className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl shadow-sm shadow-pink-900/20 transition-colors"
         >
           <Plus className="w-4 h-4" />
@@ -150,13 +150,15 @@ export default function Operations() {
         <div className="bg-red-50 text-red-700 border border-red-200 rounded-xl p-4 text-sm">{error}</div>
       )}
 
-      {showForm && (
-        <form onSubmit={handleCreate} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-5">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-slate-900">Create a new group</h2>
-            <button type="button" onClick={() => { setShowForm(false); resetForm() }} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-          </div>
-
+      <Modal
+        open={showForm}
+        onClose={() => { setShowForm(false); resetForm() }}
+        title="Create a new group"
+        subtitle="Plan your next production batch"
+        maxWidth="max-w-2xl"
+        icon={<Grid3x3 className="w-5 h-5" />}
+      >
+        <form onSubmit={handleCreate} className="space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Group Name</label>
@@ -250,7 +252,7 @@ export default function Operations() {
             </button>
           </div>
         </form>
-      )}
+      </Modal>
 
       <div className="flex items-center gap-2">
         <div className="flex bg-white border border-slate-200 rounded-xl p-1">
@@ -356,14 +358,14 @@ export default function Operations() {
                 {g.status === 'active' && (
                   <div className="flex gap-1.5">
                     <button
-                      onClick={() => handleClose(g.id)}
+                      onClick={() => setConfirmAction({ type: 'close', id: g.id })}
                       title="Close & lock group"
                       className="p-2 text-amber-600 bg-white border border-slate-200 rounded-lg hover:bg-amber-50 hover:border-amber-300"
                     >
                       <Lock className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => handleDelete(g.id)}
+                      onClick={() => setConfirmAction({ type: 'delete', id: g.id })}
                       title="Delete group"
                       className="p-2 text-red-600 bg-white border border-slate-200 rounded-lg hover:bg-red-50 hover:border-red-300"
                     >
@@ -376,6 +378,25 @@ export default function Operations() {
           ))}
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(confirmAction)}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => {
+          const act = confirmAction
+          setConfirmAction(null)
+          if (act?.type === 'close') handleClose(act.id)
+          else if (act?.type === 'delete') handleDelete(act.id)
+        }}
+        title={confirmAction?.type === 'close' ? 'Close this group?' : 'Delete this group?'}
+        message={
+          confirmAction?.type === 'close'
+            ? 'It locks all records as read-only history.'
+            : 'This group and all of its records will be permanently deleted. This cannot be undone.'
+        }
+        confirmLabel={confirmAction?.type === 'close' ? 'Close & Lock' : 'Delete'}
+        danger
+      />
     </div>
   )
 }

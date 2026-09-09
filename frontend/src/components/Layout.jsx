@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, Settings as SettingsIcon, PiggyBank, LogOut, HelpCircle } from 'lucide-react'
+import { LayoutDashboard, Grid2x2, Boxes, Syringe, Receipt, Settings as SettingsIcon, PiggyBank, LogOut } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
 import DevCredit from './DevCredit'
 import NotificationBell from './NotificationBell'
+import { ConfirmDialog } from './Modal'
 
 export default function Layout() {
   const { user, logout } = useAuth()
@@ -87,39 +88,15 @@ export default function Layout() {
         </main>
       </div>
 
-      {confirmLogout && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={() => setConfirmLogout(false)}>
-          <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-6">
-              <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4">
-                <HelpCircle className="w-6 h-6 text-red-600" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900">Sign out?</h3>
-              <p className="mt-1.5 text-sm text-slate-500">
-                Are you sure you want to sign out? You'll need to log back in to manage your farm.
-              </p>
-            </div>
-            <div className="flex justify-end gap-2 bg-slate-50 px-6 py-4">
-              <button
-                onClick={() => setConfirmLogout(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-600 border border-slate-300 rounded-lg hover:bg-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleLogout}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                Sign Out
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmLogout}
+        onClose={() => setConfirmLogout(false)}
+        onConfirm={handleLogout}
+        title="Sign out?"
+        message="Are you sure you want to sign out? You'll need to log back in to manage your farm."
+        confirmLabel="Sign Out"
+        danger
+      />
     </div>
   )
 }

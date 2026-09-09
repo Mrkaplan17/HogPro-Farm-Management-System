@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, PackagePlus, PackageMinus, AlertTriangle, X, Boxes } from 'lucide-react'
+import { Plus, Trash2, PackagePlus, PackageMinus, AlertTriangle, Boxes } from 'lucide-react'
 import { api } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { Skeleton } from '../components/Skeleton'
+import Modal, { ConfirmDialog } from '../components/Modal'
 
 const CATEGORIES = ['feed', 'medicine', 'vitamin', 'supplies']
 
@@ -19,6 +20,7 @@ export default function Inventory() {
   const [action, setAction] = useState(null) // { type: 'restock'|'issue', item }
   const [txn, setTxn] = useState({ qty: '', unit_cost: '', batch_id: '', notes: '' })
   const [batches, setBatches] = useState([])
+  const [deleteTarget, setDeleteTarget] = useState(null)
 
   async function loadAll() {
     setLoading(true)
@@ -83,7 +85,6 @@ export default function Inventory() {
   }
 
   async function removeItem(item) {
-    if (!confirm(`Delete "${item.name}"? This removes its transaction history too.`)) return
     try { await api.deleteInventoryItem(item.id); loadAll() } catch (err) { setBanner(err.message) }
   }
 
@@ -96,9 +97,9 @@ export default function Inventory() {
           <h1 className="text-2xl font-bold text-slate-900">Inventory</h1>
           <p className="text-sm text-slate-500 mt-0.5">Feeds, medicines, vitamins &amp; supplies with reorder alerts.</p>
         </div>
-        <button onClick={() => setShowForm(!showForm)} className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
-          {showForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-          {showForm ? 'Close' : 'New Item'}
+        <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
+          <Plus className="w-4 h-4" />
+          New Item
         </button>
       </header>
 
@@ -108,9 +109,9 @@ export default function Inventory() {
         </div>
       )}
 
-      {showForm && (
-        <form onSubmit={submitItem} className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+      <Modal open={showForm} onClose={() => setShowForm(false)} title="New Inventory Item" subtitle="Track feeds, medicines, vitamins and supplies" maxWidth="max-w-2xl">
+        <form onSubmit={submitItem} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Item name</label>
               <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Grower Feed" />
@@ -153,7 +154,7 @@ export default function Inventory() {
             <button type="submit" className="px-5 py-2 text-sm text-white bg-pink-600 rounded-lg font-semibold">Save Item</button>
           </div>
         </form>
-      )}
+      </Modal>
 
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -177,7 +178,7 @@ export default function Inventory() {
                     </div>
                   </div>
                   {isAdmin && (
-                    <button onClick={() => removeItem(item)} className="text-slate-300 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
+                    <button onClick={() => setDeleteTarget(item)} className="text-slate-300 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
                   )}
                 </div>
                 {item.is_low_stock && (
@@ -211,15 +212,15 @@ export default function Inventory() {
         </div>
       )}
 
-      {action && (
-        <form onSubmit={submitTxn} className="bg-white rounded-2xl border border-slate-300 p-6 space-y-4 shadow-lg">
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-slate-900">
-              {action.type === 'restock' ? 'Restock' : 'Issue'} — {action.item.name}
-              <span className="text-sm font-normal text-slate-500 ml-2">({action.item.stock_qty.toLocaleString()} {action.item.unit} on hand)</span>
-            </h2>
-            <button type="button" onClick={() => setAction(null)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-          </div>
+      <Modal
+        open={Boolean(action)}
+        onClose={() => setAction(null)}
+        title={action ? `${action.type === 'restock' ? 'Restock' : 'Issue Stock'} — ${action.item.name}` : ''}
+        subtitle={action ? `${Number(action.item.stock_qty).toLocaleString()} ${action.item.unit} on hand` : ''}
+        maxWidth="max-w-2xl"
+        icon={action?.type === 'restock' ? <PackagePlus className="w-5 h-5" /> : <PackageMinus className="w-5 h-5" />}
+      >
+        <form onSubmit={submitTxn} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Quantity ({action.item.unit})</label>
@@ -261,7 +262,7 @@ export default function Inventory() {
             </button>
           </div>
         </form>
-      )}
+      </Modal>
 
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
         <div className="px-6 py-4 border-b">
@@ -308,6 +309,16 @@ export default function Inventory() {
           </table>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => { removeItem(deleteTarget); setDeleteTarget(null) }}
+        title="Delete this item?"
+        message={`"${deleteTarget?.name}" and its full transaction history will be permanently removed.`}
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }

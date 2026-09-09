@@ -4,6 +4,7 @@ import { api } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { MONEY } from '../components/InsightCharts'
 import { Skeleton } from '../components/Skeleton'
+import { ConfirmDialog } from '../components/Modal'
 
 const CATEGORIES = ['piglets', 'feed', 'medicine', 'veterinary', 'utilities', 'labor', 'maintenance', 'inventory', 'misc']
 
@@ -15,6 +16,7 @@ export default function Expenses() {
   const [batchFilter, setBatchFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState(null)
 
   async function loadAll() {
     setLoading(true)
@@ -38,7 +40,6 @@ export default function Expenses() {
   useEffect(() => { loadAll() }, [category, batchFilter])
 
   async function remove(id) {
-    if (!confirm('Delete this expense?')) return
     try { await api.deleteExpense(id); loadAll() } catch (err) { setError(err.message) }
   }
 
@@ -132,7 +133,7 @@ export default function Expenses() {
                     </td>
                     {isAdmin && e.source === 'manual' && (
                       <td className="py-3 px-5 w-14 text-right">
-                        <button onClick={() => remove(e.id)} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
+                        <button onClick={() => setDeleteTarget(e.id)} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
                       </td>
                     )}
                   </tr>
@@ -142,6 +143,16 @@ export default function Expenses() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => { remove(deleteTarget); setDeleteTarget(null) }}
+        title="Delete expense?"
+        message="This expense entry will be permanently removed from the ledger."
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }

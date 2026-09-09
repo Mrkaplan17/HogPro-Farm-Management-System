@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, CheckCircle2, X, Syringe, CalendarClock, Bell } from 'lucide-react'
+import { Plus, Trash2, CheckCircle2, Syringe, CalendarClock, Bell } from 'lucide-react'
 import { api } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { Skeleton } from '../components/Skeleton'
+import Modal, { ConfirmDialog } from '../components/Modal'
 
 const EMPTY_V = { batch_id: '', vitamin_name: '', dosage: '', unit: 'ml', date_administered: new Date().toISOString().split('T')[0], next_due_date: '', create_reminder: false, notes: '' }
 const EMPTY_R = { title: '', description: '', reminder_type: 'general', batch_id: '', due_date: new Date().toISOString().split('T')[0], recurring: false }
@@ -19,6 +20,7 @@ export default function Vitamins() {
   const [vForm, setVForm] = useState(EMPTY_V)
   const [showR, setShowR] = useState(false)
   const [rForm, setRForm] = useState(EMPTY_R)
+  const [deleteTarget, setDeleteTarget] = useState(null)
 
   async function loadAll() {
     setLoading(true)
@@ -82,7 +84,6 @@ export default function Vitamins() {
   }
 
   async function remove(id, kind) {
-    if (!confirm('Delete this record?')) return
     try {
       if (kind === 'reminder') await api.deleteReminder(id)
       else await api.deleteVitamin(id)
@@ -111,7 +112,7 @@ export default function Vitamins() {
           ))}
         </div>
         {(tab === 'admin' ? isAdmin : true) && (
-          <button onClick={() => (tab === 'admin' ? setShowV((s) => !s) : setShowR((s) => !s))}
+          <button onClick={() => (tab === 'admin' ? setShowV(true) : setShowR(true))}
             className="flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white text-sm font-semibold px-5 py-2.5 rounded-xl">
             {tab === 'admin' ? <><Syringe className="w-4 h-4" /> Log Dose</> : <><Plus className="w-4 h-4" /> New Reminder</>}
           </button>
@@ -120,8 +121,8 @@ export default function Vitamins() {
 
       {tab === 'admin' ? (
         <>
-          {showV && (
-            <form onSubmit={submitV} className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+          <Modal open={showV} onClose={() => setShowV(false)} title="Log Dose" subtitle="Record a vitamin or dewormer injection" maxWidth="max-w-2xl" icon={<Syringe className="w-5 h-5" />}>
+            <form onSubmit={submitV} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Vitamin / dewormer</label>
@@ -171,7 +172,7 @@ export default function Vitamins() {
                 <button type="submit" className="px-5 py-2 text-sm text-white bg-pink-600 rounded-lg font-semibold">Save Dose</button>
               </div>
             </form>
-          )}
+          </Modal>
 
           {loading ? (
             <div className="space-y-4">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
@@ -205,7 +206,7 @@ export default function Vitamins() {
                           <td className="py-3 px-5 text-slate-600">{v.notes || '—'}</td>
                           {isAdmin && (
                             <td className="py-3 px-5 text-right">
-                              <button onClick={() => remove(v.id, 'vitamin')} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
+                              <button onClick={() => setDeleteTarget({ id: v.id, kind: 'vitamin' })} className="text-red-500 hover:text-red-700"><Trash2 className="w-4 h-4" /></button>
                             </td>
                           )}
                         </tr>
@@ -224,7 +225,8 @@ export default function Vitamins() {
           </div>
 
           {showR && (
-            <form onSubmit={submitR} className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+          <Modal open={showR} onClose={() => setShowR(false)} title="New Reminder" subtitle="Schedule a future dose or task" maxWidth="max-w-2xl" icon={<CalendarClock className="w-5 h-5" />}>
+            <form onSubmit={submitR} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Title</label>
@@ -264,7 +266,8 @@ export default function Vitamins() {
                 <button type="submit" className="px-5 py-2 text-sm text-white bg-pink-600 rounded-lg font-semibold">Save Reminder</button>
               </div>
             </form>
-          )}
+          </Modal>
+        )}
 
           {loading ? (
             <div className="space-y-4">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
@@ -300,7 +303,7 @@ export default function Vitamins() {
                         <button onClick={() => complete(r.id)} title="Mark done" className="p-2 text-green-600 hover:bg-green-50 rounded-lg"><CheckCircle2 className="w-4 h-4" /></button>
                       )}
                       {isAdmin && (
-                        <button onClick={() => remove(r.id, 'reminder')} className="p-2 text-slate-400 hover:text-red-600 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+                        <button onClick={() => setDeleteTarget({ id: r.id, kind: 'reminder' })} className="p-2 text-slate-400 hover:text-red-600 rounded-lg"><Trash2 className="w-4 h-4" /></button>
                       )}
                     </div>
                   </div>
@@ -310,6 +313,16 @@ export default function Vitamins() {
           )}
         </>
       )}
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => { remove(deleteTarget.id, deleteTarget.kind); setDeleteTarget(null) }}
+        title="Delete this record?"
+        message={deleteTarget?.kind === 'reminder' ? 'This scheduled reminder will be permanently removed.' : 'This vitamin log entry will be permanently removed.'}
+        confirmLabel="Delete"
+        danger
+      />
     </div>
   )
 }
